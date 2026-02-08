@@ -17,6 +17,8 @@ import {
   SAVE_QUEUE_CLOSE,
   SHARE_MENU_OPEN,
   SHARE_MENU_CLOSE,
+  LISTEN_TOGETHER_OPEN,
+  LISTEN_TOGETHER_CLOSE,
 } from '../actions'
 
 export const shareDialogReducer = (
@@ -182,6 +184,35 @@ export const saveQueueDialogReducer = (
       return { ...previousState, open: true }
     case SAVE_QUEUE_CLOSE:
       return { ...previousState, open: false }
+    default:
+      return previousState
+  }
+}
+
+export const listenTogetherDialogReducer = (
+  previousState = {
+    open: false,
+    ids: [],
+    resource: '',
+    name: '',
+  },
+  payload,
+) => {
+  const { type, ids, resource, name } = payload
+  switch (type) {
+    case LISTEN_TOGETHER_OPEN:
+      return {
+        ...previousState,
+        open: true,
+        ids,
+        resource,
+        name,
+      }
+    case LISTEN_TOGETHER_CLOSE:
+      return {
+        ...previousState,
+        open: false,
+      }
     default:
       return previousState
   }

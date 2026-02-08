@@ -73,6 +73,10 @@ func (s *SQLStore) Share(ctx context.Context) model.ShareRepository {
 	return NewShareRepository(ctx, s.getDBXBuilder())
 }
 
+func (s *SQLStore) ListenSession(ctx context.Context) model.ListenSessionRepository {
+	return NewListenSessionRepository(ctx, s.getDBXBuilder())
+}
+
 func (s *SQLStore) User(ctx context.Context) model.UserRepository {
 	return NewUserRepository(ctx, s.getDBXBuilder())
 }

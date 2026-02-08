@@ -20,6 +20,7 @@ import {
   DOWNLOAD_MENU_ALBUM,
   DOWNLOAD_MENU_ARTIST,
   openShareMenu,
+  openListenTogetherDialog,
 } from '../actions'
 import { LoveButton } from './LoveButton'
 import config from '../config'
@@ -110,6 +111,17 @@ const ContextMenu = ({
           dispatch(openShareMenu([record.id], resource, record.name)),
       },
     }),
+    listenTogether: {
+      enabled: config.enableListenTogether,
+      needData: false,
+      label: translate('resources.listenTogether.name', {
+        _: 'Listen Together',
+      }),
+      action: (record) =>
+        dispatch(
+          openListenTogetherDialog([record.id], resource, record.name),
+        ),
+    },
     download: {
       enabled: config.enableDownloads && record.size,
       needData: false,

@@ -43,6 +43,7 @@ const defaultConfig = {
   separator: '/',
   enableInspect: true,
   pluginsEnabled: true,
+  enableListenTogether: true,
 }
 
 let config
@@ -63,6 +64,14 @@ try {
   shareInfo = JSON.parse(window.__SHARE_INFO__)
 } catch (e) {
   shareInfo = null
+}
+
+export let listenTogetherInfo
+
+try {
+  listenTogetherInfo = JSON.parse(window.__LISTEN_TOGETHER_INFO__)
+} catch (e) {
+  listenTogetherInfo = null
 }
 
 export default config

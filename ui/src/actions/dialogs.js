@@ -86,3 +86,17 @@ export const openSaveQueueDialog = () => ({
 export const closeSaveQueueDialog = () => ({
   type: SAVE_QUEUE_CLOSE,
 })
+
+export const LISTEN_TOGETHER_OPEN = 'LISTEN_TOGETHER_OPEN'
+export const LISTEN_TOGETHER_CLOSE = 'LISTEN_TOGETHER_CLOSE'
+
+export const openListenTogetherDialog = (ids, resource, name) => ({
+  type: LISTEN_TOGETHER_OPEN,
+  ids,
+  resource,
+  name,
+})
+
+export const closeListenTogetherDialog = () => ({
+  type: LISTEN_TOGETHER_CLOSE,
+})

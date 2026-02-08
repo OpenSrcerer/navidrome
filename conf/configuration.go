@@ -85,6 +85,7 @@ type configOptions struct {
 	EnableArtworkUpload             bool
 	MaxImageUploadSize              string
 	EnableSharing                   bool
+	EnableListenTogether            bool
 	ShareURL                        string
 	DefaultShareExpiration          time.Duration
 	DefaultDownloadableShare        bool
@@ -793,6 +794,7 @@ func setViperDefaults() {
 	viper.SetDefault("enableartworkupload", true)
 	viper.SetDefault("maximageuploadsize", consts.DefaultMaxImageUploadSize)
 	viper.SetDefault("enablesharing", false)
+	viper.SetDefault("enablelistentogether", true)
 	viper.SetDefault("shareurl", "")
 	viper.SetDefault("defaultshareexpiration", 8760*time.Hour)
 	viper.SetDefault("defaultdownloadableshare", false)
