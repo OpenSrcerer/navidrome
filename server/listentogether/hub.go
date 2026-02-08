@@ -53,6 +53,7 @@ type Participant struct {
 
 // StatePayload is broadcast to all participants after state changes.
 type StatePayload struct {
+	Action            string      `json:"action,omitempty"`     // What triggered this state update (e.g. "play", "seek", "queue_add")
 	CurrentTrackIndex int         `json:"currentTrackIndex"`
 	Position          float64     `json:"position"`
 	IsPlaying         bool        `json:"isPlaying"`
@@ -312,7 +313,7 @@ func (ls *LiveSession) handlePlay(sender *Participant) {
 	ls.mu.Lock()
 	ls.isPlaying = true
 	ls.mu.Unlock()
-	ls.broadcastState()
+	ls.broadcastState("play")
 }
 
 func (ls *LiveSession) handlePause(sender *Participant) {
@@ -323,7 +324,7 @@ func (ls *LiveSession) handlePause(sender *Participant) {
 	ls.mu.Lock()
 	ls.isPlaying = false
 	ls.mu.Unlock()
-	ls.broadcastState()
+	ls.broadcastState("pause")
 }
 
 func (ls *LiveSession) handleSeek(sender *Participant, payload json.RawMessage) {
@@ -341,7 +342,7 @@ func (ls *LiveSession) handleSeek(sender *Participant, payload json.RawMessage) 
 	ls.mu.Lock()
 	ls.position = data.Position
 	ls.mu.Unlock()
-	ls.broadcastState()
+	ls.broadcastState("seek")
 }
 
 func (ls *LiveSession) handleSkipNext(sender *Participant) {
@@ -355,7 +356,7 @@ func (ls *LiveSession) handleSkipNext(sender *Participant) {
 		ls.position = 0
 	}
 	ls.mu.Unlock()
-	ls.broadcastState()
+	ls.broadcastState("skip_next")
 }
 
 func (ls *LiveSession) handleSkipPrev(sender *Participant) {
@@ -369,7 +370,7 @@ func (ls *LiveSession) handleSkipPrev(sender *Participant) {
 		ls.position = 0
 	}
 	ls.mu.Unlock()
-	ls.broadcastState()
+	ls.broadcastState("skip_prev")
 }
 
 func (ls *LiveSession) handleSync(sender *Participant, payload json.RawMessage) {
@@ -383,13 +384,17 @@ func (ls *LiveSession) handleSync(sender *Participant, payload json.RawMessage) 
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return
 	}
+	// Only update internal state for new joiners — do NOT broadcast.
+	// Broadcasting sync would cause periodic position jumps on all clients,
+	// ruining smooth playback. Clients track their own position locally and
+	// only seek when the remote holder performs an explicit action
+	// (play, pause, seek, skip).
 	ls.mu.Lock()
 	ls.position = data.Position
 	if data.TrackIndex >= 0 && data.TrackIndex < len(ls.queue) {
 		ls.currentIndex = data.TrackIndex
 	}
 	ls.mu.Unlock()
-	ls.broadcastState()
 }
 
 func (ls *LiveSession) handlePassRemote(sender *Participant, payload json.RawMessage) {
@@ -505,7 +510,7 @@ func (ls *LiveSession) handleQueueAdd(sender *Participant, payload json.RawMessa
 	ls.queue = append(ls.queue, newIdx)
 	ls.mu.Unlock()
 
-	ls.broadcastState()
+	ls.broadcastState("queue_add")
 }
 
 func (ls *LiveSession) handleQueueRemove(sender *Participant, payload json.RawMessage) {
@@ -540,7 +545,7 @@ func (ls *LiveSession) handleQueueRemove(sender *Participant, payload json.RawMe
 	}
 	ls.mu.Unlock()
 
-	ls.broadcastState()
+	ls.broadcastState("queue_remove")
 }
 
 func (ls *LiveSession) handleQueueReorder(sender *Participant, payload json.RawMessage) {
@@ -585,7 +590,7 @@ func (ls *LiveSession) handleQueueReorder(sender *Participant, payload json.RawM
 	}
 	ls.mu.Unlock()
 
-	ls.broadcastState()
+	ls.broadcastState("queue_reorder")
 }
 
 func (ls *LiveSession) handleEndSession(sender *Participant) {
@@ -618,7 +623,9 @@ func (ls *LiveSession) handleEndSession(sender *Participant) {
 }
 
 // broadcastState sends the current state to all participants.
-func (ls *LiveSession) broadcastState() {
+// The action parameter indicates what triggered the broadcast (e.g. "play", "seek", "queue_add"),
+// allowing clients to decide whether to apply the position or ignore it.
+func (ls *LiveSession) broadcastState(action string) {
 	ls.mu.RLock()
 	queueTracks := make([]TrackInfo, len(ls.queue))
 	for i, idx := range ls.queue {
@@ -627,6 +634,7 @@ func (ls *LiveSession) broadcastState() {
 		}
 	}
 	state := StatePayload{
+		Action:            action,
 		CurrentTrackIndex: ls.currentIndex,
 		Position:          ls.position,
 		IsPlaying:         ls.isPlaying,
@@ -739,6 +747,7 @@ func (ls *LiveSession) SendWelcome(p *Participant) {
 		}
 	}
 	state := StatePayload{
+		Action:            "welcome",
 		CurrentTrackIndex: ls.currentIndex,
 		Position:          ls.position,
 		IsPlaying:         ls.isPlaying,
