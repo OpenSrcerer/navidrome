@@ -120,6 +120,11 @@ func startServer(ctx context.Context) func() error {
 		a.MountRouter("Native API", consts.URLPathNativeAPI, CreateNativeAPIRouter(ctx))
 		a.MountRouter("Subsonic API", consts.URLPathSubsonicAPI, CreateSubsonicAPIRouter(ctx))
 		a.MountRouter("Public Endpoints", consts.URLPathPublic, CreatePublicRouter())
+		if conf.Server.EnableListenTogether {
+			ltRouter := CreateListenTogetherRouter()
+			a.MountRouter("Listen Together API", consts.URLPathNativeAPI+"/listenTogether", ltRouter)
+			a.MountRouter("Listen Together Public", consts.URLPathPublic+"/lt", ltRouter.PublicRoutes())
+		}
 		if conf.Server.LastFM.Enabled {
 			a.MountRouter("LastFM Auth", consts.URLPathNativeAPI+"/lastfm", CreateLastFMRouter())
 		}

@@ -21,15 +21,19 @@ import (
 )
 
 func Index(ds model.DataStore, fs fs.FS) http.HandlerFunc {
-	return serveIndex(ds, fs, nil)
+	return serveIndex(ds, fs, nil, nil)
 }
 
 func IndexWithShare(ds model.DataStore, fs fs.FS, shareInfo *model.Share) http.HandlerFunc {
-	return serveIndex(ds, fs, shareInfo)
+	return serveIndex(ds, fs, shareInfo, nil)
+}
+
+func IndexWithListenTogether(ds model.DataStore, fs fs.FS, sessionInfo *model.ListenSession) http.HandlerFunc {
+	return serveIndex(ds, fs, nil, sessionInfo)
 }
 
 // Injects the config in the `index.html` template
-func serveIndex(ds model.DataStore, fs fs.FS, shareInfo *model.Share) http.HandlerFunc {
+func serveIndex(ds model.DataStore, fs fs.FS, shareInfo *model.Share, listenTogetherInfo *model.ListenSession) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := ds.User(r.Context()).CountAll()
 		firstTime := c == 0 && err == nil
@@ -75,6 +79,7 @@ func serveIndex(ds model.DataStore, fs fs.FS, shareInfo *model.Share) http.Handl
 			"separator":                 string(os.PathSeparator),
 			"enableInspect":             conf.Server.Inspect.Enabled,
 			"pluginsEnabled":            conf.Server.Plugins.Enabled,
+			"enableListenTogether":      conf.Server.EnableListenTogether,
 		}
 		if strings.HasPrefix(conf.Server.UILoginBackgroundURL, "/") {
 			appConfig["loginBackgroundURL"] = path.Join(conf.Server.BasePath, conf.Server.UILoginBackgroundURL)
@@ -100,6 +105,7 @@ func serveIndex(ds model.DataStore, fs fs.FS, shareInfo *model.Share) http.Handl
 			"Version":   version,
 		}
 		addShareData(r, data, shareInfo)
+		addListenTogetherData(r, data, listenTogetherInfo)
 
 		w.Header().Set("Content-Type", "text/html")
 		err = t.Execute(w, data)
@@ -181,4 +187,50 @@ func addShareData(r *http.Request, data map[string]interface{}, shareInfo *model
 	data["ShareURL"] = shareInfo.URL
 	data["ShareImageURL"] = shareInfo.ImageURL
 	data["ShareInfo"] = string(shareInfoJson)
+}
+
+type listenTogetherData struct {
+	ID          string               `json:"id"`
+	Description string               `json:"description"`
+	Tracks      []listenTogetherTrack `json:"tracks"`
+}
+
+type listenTogetherTrack struct {
+	ID        string    `json:"id,omitempty"`
+	Title     string    `json:"title,omitempty"`
+	Artist    string    `json:"artist,omitempty"`
+	Album     string    `json:"album,omitempty"`
+	Duration  float32   `json:"duration,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func addListenTogetherData(r *http.Request, data map[string]interface{}, sessionInfo *model.ListenSession) {
+	ctx := r.Context()
+	if sessionInfo == nil || sessionInfo.ID == "" {
+		return
+	}
+	ltd := listenTogetherData{
+		ID:          sessionInfo.ID,
+		Description: sessionInfo.Description,
+	}
+	ltd.Tracks = make([]listenTogetherTrack, len(sessionInfo.Tracks))
+	for i, mf := range sessionInfo.Tracks {
+		ltd.Tracks[i] = listenTogetherTrack{
+			ID:        mf.ID,
+			Title:     mf.Title,
+			Artist:    mf.Artist,
+			Album:     mf.Album,
+			Duration:  mf.Duration,
+			UpdatedAt: mf.UpdatedAt,
+		}
+	}
+
+	ltJson, err := json.Marshal(ltd)
+	if err != nil {
+		log.Error(ctx, "Error converting listenTogetherInfo to JSON", "session", sessionInfo, err)
+	} else {
+		log.Trace(ctx, "Injecting listenTogetherInfo in index.html", "config", string(ltJson))
+	}
+
+	data["ListenTogetherInfo"] = string(ltJson)
 }

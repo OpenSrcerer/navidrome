@@ -33,13 +33,15 @@ import {
   replayGainReducer,
   downloadMenuDialogReducer,
   shareDialogReducer,
+  listenTogetherDialogReducer,
 } from './reducers'
 import createAdminStore from './store/createAdminStore'
 import { i18nProvider } from './i18n'
-import config, { shareInfo } from './config'
+import config, { shareInfo, listenTogetherInfo } from './config'
 import { keyMap } from './hotkeys'
 import useChangeThemeColor from './useChangeThemeColor'
 import SharePlayer from './share/SharePlayer'
+import ListenTogetherPlayer from './listenTogether/ListenTogetherPlayer'
 import { HTML5Backend } from 'react-dnd-html5-backend'
 import { DndProvider } from 'react-dnd'
 import missing from './missing/index.js'
@@ -69,6 +71,7 @@ const adminStore = createAdminStore({
     listenBrainzTokenDialog: listenBrainzTokenDialogReducer,
     saveQueueDialog: saveQueueDialogReducer,
     shareDialog: shareDialogReducer,
+    listenTogetherDialog: listenTogetherDialogReducer,
     activity: activityReducer,
     settings: settingsReducer,
     replayGain: replayGainReducer,
@@ -165,6 +168,9 @@ const Admin = (props) => {
 const AppWithHotkeys = () => {
   let language = localStorage.getItem('locale') || 'en'
   document.documentElement.lang = language
+  if (config.enableListenTogether && listenTogetherInfo) {
+    return <ListenTogetherPlayer />
+  }
   if (config.enableSharing && shareInfo) {
     return <SharePlayer />
   }

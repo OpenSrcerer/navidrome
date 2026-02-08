@@ -21,6 +21,7 @@ import {
   openDownloadMenu,
   DOWNLOAD_MENU_SONG,
   openShareMenu,
+  openListenTogetherDialog,
 } from '../actions'
 import { LoveButton } from './LoveButton'
 import config from '../config'
@@ -131,6 +132,20 @@ export const SongContextMenu = ({
       action: (record) =>
         dispatch(
           openShareMenu(
+            [record.mediaFileId || record.id],
+            'song',
+            record.title,
+          ),
+        ),
+    },
+    listenTogether: {
+      enabled: config.enableListenTogether,
+      label: translate('resources.listenTogether.name', {
+        _: 'Listen Together',
+      }),
+      action: (record) =>
+        dispatch(
+          openListenTogetherDialog(
             [record.mediaFileId || record.id],
             'song',
             record.title,

@@ -35,7 +35,7 @@ var _ = Describe("serveIndex", func() {
 		r := httptest.NewRequest("GET", "/index.html", nil)
 		w := httptest.NewRecorder()
 
-		serveIndex(ds, fs, nil)(w, r)
+		serveIndex(ds, fs, nil, nil)(w, r)
 
 		Expect(w.Code).To(Equal(200))
 		config := extractAppConfig(w.Body.String())
@@ -47,7 +47,7 @@ var _ = Describe("serveIndex", func() {
 		r := httptest.NewRequest("GET", "/index.html", nil)
 		w := httptest.NewRecorder()
 
-		serveIndex(ds, fs, nil)(w, r)
+		serveIndex(ds, fs, nil, nil)(w, r)
 
 		config := extractAppConfig(w.Body.String())
 		Expect(config).To(HaveKeyWithValue("firstTime", true))
@@ -58,7 +58,7 @@ var _ = Describe("serveIndex", func() {
 		r := httptest.NewRequest("GET", "/index.html", nil)
 		w := httptest.NewRecorder()
 
-		serveIndex(ds, fs, nil)(w, r)
+		serveIndex(ds, fs, nil, nil)(w, r)
 
 		config := extractAppConfig(w.Body.String())
 		Expect(config).To(HaveKeyWithValue("firstTime", false))
@@ -70,7 +70,7 @@ var _ = Describe("serveIndex", func() {
 			r := httptest.NewRequest("GET", "/index.html", nil)
 			w := httptest.NewRecorder()
 
-			serveIndex(ds, fs, nil)(w, r)
+			serveIndex(ds, fs, nil, nil)(w, r)
 
 			config := extractAppConfig(w.Body.String())
 			Expect(config).To(HaveKeyWithValue(configKey, expectedValue))
@@ -110,7 +110,7 @@ var _ = Describe("serveIndex", func() {
 			r := httptest.NewRequest("GET", "/index.html", nil)
 			w := httptest.NewRecorder()
 
-			serveIndex(ds, fs, nil)(w, r)
+			serveIndex(ds, fs, nil, nil)(w, r)
 
 			config := extractAppConfig(w.Body.String())
 			Expect(config).To(HaveKeyWithValue(configKey, expectedValueFunc()))
@@ -134,7 +134,7 @@ var _ = Describe("serveIndex", func() {
 					r := httptest.NewRequest("GET", "/index.html", nil)
 					w := httptest.NewRecorder()
 
-					serveIndex(ds, fs, nil)(w, r)
+					serveIndex(ds, fs, nil, nil)(w, r)
 
 					config := extractAppConfig(w.Body.String())
 					Expect(config).To(HaveKeyWithValue("loginBackgroundURL", consts.DefaultUILoginBackgroundURL))
@@ -146,7 +146,7 @@ var _ = Describe("serveIndex", func() {
 					r := httptest.NewRequest("GET", "/index.html", nil)
 					w := httptest.NewRecorder()
 
-					serveIndex(ds, fs, nil)(w, r)
+					serveIndex(ds, fs, nil, nil)(w, r)
 
 					config := extractAppConfig(w.Body.String())
 					Expect(config).To(HaveKeyWithValue("loginBackgroundURL", consts.DefaultUILoginBackgroundURLOffline))
@@ -158,7 +158,7 @@ var _ = Describe("serveIndex", func() {
 					r := httptest.NewRequest("GET", "/index.html", nil)
 					w := httptest.NewRecorder()
 
-					serveIndex(ds, fs, nil)(w, r)
+					serveIndex(ds, fs, nil, nil)(w, r)
 
 					config := extractAppConfig(w.Body.String())
 					Expect(config).To(HaveKeyWithValue("loginBackgroundURL", "https://example.com/images/1.jpg"))
@@ -175,7 +175,7 @@ var _ = Describe("serveIndex", func() {
 					r := httptest.NewRequest("GET", "/index.html", nil)
 					w := httptest.NewRecorder()
 
-					serveIndex(ds, fs, nil)(w, r)
+					serveIndex(ds, fs, nil, nil)(w, r)
 
 					config := extractAppConfig(w.Body.String())
 					Expect(config).To(HaveKeyWithValue("loginBackgroundURL", "/music"+consts.DefaultUILoginBackgroundURL))
@@ -187,7 +187,7 @@ var _ = Describe("serveIndex", func() {
 					r := httptest.NewRequest("GET", "/index.html", nil)
 					w := httptest.NewRecorder()
 
-					serveIndex(ds, fs, nil)(w, r)
+					serveIndex(ds, fs, nil, nil)(w, r)
 
 					config := extractAppConfig(w.Body.String())
 					Expect(config).To(HaveKeyWithValue("loginBackgroundURL", consts.DefaultUILoginBackgroundURLOffline))
@@ -199,7 +199,7 @@ var _ = Describe("serveIndex", func() {
 					r := httptest.NewRequest("GET", "/index.html", nil)
 					w := httptest.NewRecorder()
 
-					serveIndex(ds, fs, nil)(w, r)
+					serveIndex(ds, fs, nil, nil)(w, r)
 
 					config := extractAppConfig(w.Body.String())
 					Expect(config).To(HaveKeyWithValue("loginBackgroundURL", "https://example.com/images/1.jpg"))

@@ -22,6 +22,7 @@ type MockDataStore struct {
 	MockedPlaylist       model.PlaylistRepository
 	MockedPlayQueue      model.PlayQueueRepository
 	MockedShare          model.ShareRepository
+	MockedListenSession  model.ListenSessionRepository
 	MockedTranscoding    model.TranscodingRepository
 	MockedUserProps      model.UserPropsRepository
 	MockedScrobbleBuffer model.ScrobbleBufferRepository
@@ -168,6 +169,17 @@ func (db *MockDataStore) Share(ctx context.Context) model.ShareRepository {
 		}
 	}
 	return db.MockedShare
+}
+
+func (db *MockDataStore) ListenSession(ctx context.Context) model.ListenSessionRepository {
+	if db.MockedListenSession == nil {
+		if db.RealDS != nil {
+			db.MockedListenSession = db.RealDS.ListenSession(ctx)
+		} else {
+			db.MockedListenSession = &MockListenSessionRepo{}
+		}
+	}
+	return db.MockedListenSession
 }
 
 func (db *MockDataStore) User(ctx context.Context) model.UserRepository {

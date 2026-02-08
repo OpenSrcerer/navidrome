@@ -22,6 +22,7 @@ import (
 	"github.com/navidrome/navidrome/server"
 	"github.com/navidrome/navidrome/server/events"
 	"github.com/navidrome/navidrome/server/nativeapi"
+	"github.com/navidrome/navidrome/server/listentogether"
 	"github.com/navidrome/navidrome/server/public"
 	"github.com/navidrome/navidrome/server/subsonic"
 )
@@ -33,6 +34,7 @@ var allProviders = wire.NewSet(
 	subsonic.New,
 	nativeapi.New,
 	public.New,
+	listentogether.New,
 	persistence.New,
 	lastfm.NewRouter,
 	listenbrainz.NewRouter,
@@ -117,6 +119,12 @@ func CreateScanWatcher(ctx context.Context) scanner.Watcher {
 }
 
 func GetPlaybackServer() playback.PlaybackServer {
+	panic(wire.Build(
+		allProviders,
+	))
+}
+
+func CreateListenTogetherRouter() *listentogether.Router {
 	panic(wire.Build(
 		allProviders,
 	))
