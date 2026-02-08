@@ -151,6 +151,7 @@ const ListenTogetherPlayer = () => {
   const wsRef = useRef(null)
   const audioRef = useRef(null)
   const syncIntervalRef = useRef(null)
+  const currentTrackIndexRef = useRef(0)
 
   // State
   const [myId, setMyId] = useState(null)
@@ -166,7 +167,7 @@ const ListenTogetherPlayer = () => {
   // Session state from server
   const [queue, setQueue] = useState([])
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0)
-  const [position, setPosition] = useState(0)
+  const [localPosition, setLocalPosition] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [participants, setParticipants] = useState([])
   const [remoteHolder, setRemoteHolder] = useState({
@@ -209,9 +210,30 @@ const ListenTogetherPlayer = () => {
 
     ws.onState = (state) => {
       setQueue(state.queue || [])
-      setCurrentTrackIndex(state.currentTrackIndex || 0)
-      setPosition(state.position || 0)
       setIsPlaying(state.isPlaying || false)
+
+      const newTrackIndex = state.currentTrackIndex || 0
+      const prevTrackIndex = currentTrackIndexRef.current
+      setCurrentTrackIndex(newTrackIndex)
+      currentTrackIndexRef.current = newTrackIndex
+
+      // Only force-seek audio position on explicit playback actions or
+      // track changes. Queue-only updates and play/pause should NOT touch
+      // the position — the client tracks its own position locally via the
+      // audio element's timeupdate event, which keeps the progress bar
+      // smooth and avoids periodic jumps.
+      const action = state.action || ''
+      const trackChanged = newTrackIndex !== prevTrackIndex
+      const isPositionAction = ['seek', 'skip_next', 'skip_prev', 'welcome'].includes(action)
+
+      if (trackChanged || isPositionAction) {
+        const newPosition = state.position || 0
+        setLocalPosition(newPosition)
+        const audio = audioRef.current
+        if (audio) {
+          audio.currentTime = newPosition
+        }
+      }
     }
 
     ws.onParticipants = (data) => {
@@ -244,7 +266,22 @@ const ListenTogetherPlayer = () => {
     }
   }, [displayName, sessionId, nameDialogOpen])
 
-  // Audio playback sync
+  // Track local playback position via the audio element's timeupdate event.
+  // This gives smooth, continuous progress bar updates without relying on
+  // periodic server broadcasts.
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const handleTimeUpdate = () => {
+      setLocalPosition(audio.currentTime)
+    }
+    audio.addEventListener('timeupdate', handleTimeUpdate)
+    return () => audio.removeEventListener('timeupdate', handleTimeUpdate)
+  }, [])
+
+  // Audio source and play/pause sync.
+  // Position seeking is handled in the onState callback above — this effect
+  // only manages source changes and play/pause toggling.
   useEffect(() => {
     if (!currentTrack || !connected) return
 
@@ -261,12 +298,7 @@ const ListenTogetherPlayer = () => {
     } else {
       audio.pause()
     }
-
-    // Sync position (allow 2 second drift)
-    if (Math.abs(audio.currentTime - position) > 2) {
-      audio.currentTime = position
-    }
-  }, [currentTrack, isPlaying, position, connected])
+  }, [currentTrack, isPlaying, connected])
 
   // Send periodic sync if remote holder
   useEffect(() => {
@@ -427,7 +459,7 @@ const ListenTogetherPlayer = () => {
   }, [])
 
   const progressPercent = currentTrack
-    ? (position / currentTrack.duration) * 100
+    ? (localPosition / currentTrack.duration) * 100
     : 0
 
   return (
@@ -547,7 +579,7 @@ const ListenTogetherPlayer = () => {
                   value={Math.min(progressPercent, 100)}
                 />
                 <div className={classes.progressText}>
-                  <span>{formatTime(position)}</span>
+                  <span>{formatTime(localPosition)}</span>
                   <span>{formatTime(currentTrack?.duration)}</span>
                 </div>
               </Box>
