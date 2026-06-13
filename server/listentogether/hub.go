@@ -3,11 +3,15 @@ package listentogether
 import (
 	"context"
 	"encoding/json"
+	"path"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/navidrome/navidrome/conf"
+	"github.com/navidrome/navidrome/consts"
 	"github.com/navidrome/navidrome/core/auth"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
@@ -31,13 +35,14 @@ type WSMessage struct {
 
 // TrackInfo holds metadata + streaming token for a track in the session.
 type TrackInfo struct {
-	ID        string  `json:"id"`
-	Token     string  `json:"token"`     // JWT streaming token
-	Title     string  `json:"title"`
-	Artist    string  `json:"artist"`
-	Album     string  `json:"album"`
-	Duration  float32 `json:"duration"`
-	MediaFileID string `json:"mediaFileId"` // Original media file ID for search/add
+	ID          string  `json:"id"`
+	Token       string  `json:"token"` // JWT streaming token
+	Title       string  `json:"title"`
+	Artist      string  `json:"artist"`
+	Album       string  `json:"album"`
+	Duration    float32 `json:"duration"`
+	MediaFileID string  `json:"mediaFileId"`        // Original media file ID for search/add
+	CoverArt    string  `json:"coverArt,omitempty"` // Public, token-signed cover art URL
 }
 
 // Participant represents a connected WebSocket client.
@@ -140,6 +145,7 @@ func (h *Hub) CreateSession(session *model.ListenSession) *LiveSession {
 			Album:       mf.Album,
 			Duration:    mf.Duration,
 			MediaFileID: mf.ID,
+			CoverArt:    coverArtURL(mf),
 		}
 		queue[i] = i
 	}
@@ -650,6 +656,7 @@ func (ls *LiveSession) handleQueueAdd(sender *Participant, payload json.RawMessa
 		Album:       mf.Album,
 		Duration:    mf.Duration,
 		MediaFileID: mf.ID,
+		CoverArt:    coverArtURL(*mf),
 	}
 
 	ls.mu.Lock()
@@ -1045,4 +1052,19 @@ func generateStreamToken(mediaFileID string, format string, maxBitRate int) stri
 	expiry := time.Now().Add(24 * time.Hour)
 	token, _ := auth.CreateExpiringPublicToken(expiry, claims)
 	return token
+}
+
+// coverArtURL builds a public, token-signed URL for a track's cover art, served
+// by the existing public images endpoint (/share/img/{token}). Returns "" if a
+// token can't be created.
+func coverArtURL(mf model.MediaFile) string {
+	token, err := auth.CreatePublicToken(auth.Claims{ID: mf.CoverArtID().String()})
+	if err != nil {
+		return ""
+	}
+	u := path.Join(consts.URLPathPublicImages, token)
+	if size := conf.Server.UICoverArtSize; size > 0 {
+		u += "?size=" + strconv.Itoa(size)
+	}
+	return u
 }
