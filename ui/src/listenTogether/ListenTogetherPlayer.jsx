@@ -178,7 +178,60 @@ const useStyles = makeStyles((theme) => ({
     overflow: 'auto',
     marginBottom: theme.spacing(1),
   },
+  reactionBar: {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: theme.spacing(1),
+    marginTop: theme.spacing(1),
+  },
+  reactionButton: {
+    fontSize: '1.4rem',
+    cursor: 'pointer',
+    background: 'none',
+    border: 'none',
+    padding: 4,
+    borderRadius: 6,
+    lineHeight: 1,
+    '&:hover': { backgroundColor: theme.palette.action.hover },
+  },
+  '@keyframes ltFloatUp': {
+    '0%': { transform: 'translateY(0) scale(1)', opacity: 1 },
+    '100%': { transform: 'translateY(-140px) scale(1.4)', opacity: 0 },
+  },
+  floatingReaction: {
+    position: 'absolute',
+    bottom: 24,
+    fontSize: '2rem',
+    animation: '$ltFloatUp 3.5s ease-out forwards',
+    pointerEvents: 'none',
+    textAlign: 'center',
+    width: 'auto',
+  },
+  chatPanel: {
+    padding: theme.spacing(2),
+    marginTop: theme.spacing(3),
+    display: 'flex',
+    flexDirection: 'column',
+    height: 340,
+  },
+  chatMessages: {
+    flex: 1,
+    overflowY: 'auto',
+    marginBottom: theme.spacing(1),
+  },
+  chatLine: {
+    marginBottom: theme.spacing(0.5),
+    fontSize: '0.85rem',
+    wordBreak: 'break-word',
+  },
+  chatInputRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+  },
 }))
+
+const REACTION_EMOJIS = ['❤️', '🔥', '😂', '🎉', '👍', '😮']
 
 // Drift-correction tuning (seconds). Below SOFT we leave playback alone; between
 // SOFT and HARD we nudge playbackRate to converge smoothly; above HARD we hard-seek.
@@ -272,11 +325,30 @@ const ListenTogetherPlayer = () => {
   const [buffering, setBuffering] = useState(false)
   const [bufferedFraction, setBufferedFraction] = useState(0)
   const [sessionEnded, setSessionEnded] = useState(false)
+  // True while this (non-holder) client is actively nudging playbackRate to
+  // close a small drift gap.
+  const [correcting, setCorrecting] = useState(false)
+
+  // Chat + reactions
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [floatingReactions, setFloatingReactions] = useState([])
+  const chatEndRef = useRef(null)
+  const reactionSeqRef = useRef(0)
 
   const isRemoteHolder = myId && remoteHolder.holderId === myId
   const currentTrack = queue[currentTrackIndex]
 
   const sessionId = listenTogetherInfo?.id
+
+  // Local sync-health indicator shown in the app bar.
+  const syncStatus = buffering
+    ? { label: 'Buffering', color: '#ed6c02' }
+    : isRemoteHolder
+      ? { label: 'Host', color: '#2e7d32' }
+      : correcting
+        ? { label: 'Syncing', color: '#1976d2' }
+        : { label: 'In sync', color: '#2e7d32' }
 
   // Keep a ref in sync so stable callbacks (WS handlers, audio events) can read
   // the current remote-holder status without being re-created.
@@ -332,6 +404,7 @@ const ListenTogetherPlayer = () => {
           }
         }
         audio.playbackRate = 1.0
+        setCorrecting(false)
         setLocalPosition(target)
         return
       }
@@ -339,8 +412,10 @@ const ListenTogetherPlayer = () => {
       if (!isRemoteHolderRef.current && playing && absDrift > SOFT_THRESHOLD) {
         const rate = 1 - drift / CORRECTION_WINDOW
         audio.playbackRate = Math.max(0.94, Math.min(1.06, rate))
+        setCorrecting(true)
       } else {
         audio.playbackRate = 1.0
+        setCorrecting(false)
       }
     }
 
@@ -416,6 +491,23 @@ const ListenTogetherPlayer = () => {
       setConnected(isConnected)
     }
 
+    ws.onChatHistory = (data) => {
+      setChatMessages(data.messages || [])
+    }
+
+    ws.onChat = (data) => {
+      setChatMessages((prev) => [...prev.slice(-99), data])
+    }
+
+    ws.onReaction = (data) => {
+      const id = `${data.ts || Date.now()}-${reactionSeqRef.current++}`
+      setFloatingReactions((prev) => [...prev, { ...data, id }])
+      // Auto-remove the floating emoji after its animation.
+      setTimeout(() => {
+        setFloatingReactions((prev) => prev.filter((r) => r.id !== id))
+      }, 3500)
+    }
+
     ws.connect()
 
     return () => {
@@ -485,6 +577,13 @@ const ListenTogetherPlayer = () => {
   useEffect(() => {
     setBufferedFraction(0)
   }, [currentTrack?.id])
+
+  // Auto-scroll the chat to the newest message.
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [chatMessages])
 
   // Load the audio source ONLY when the track itself changes (keyed on the
   // track id, not the array object), so unrelated state updates — queue edits,
@@ -676,6 +775,20 @@ const ListenTogetherPlayer = () => {
     [isRemoteHolder],
   )
 
+  const handleSendChat = useCallback(() => {
+    const text = chatInput.trim()
+    if (text && wsRef.current) {
+      wsRef.current.sendCommand('chat', { text })
+      setChatInput('')
+    }
+  }, [chatInput])
+
+  const handleSendReaction = useCallback((emoji) => {
+    if (wsRef.current) {
+      wsRef.current.sendCommand('reaction', { emoji })
+    }
+  }, [])
+
   // Remote control
   const handleRequestRemote = useCallback(() => {
     if (wsRef.current) {
@@ -795,14 +908,36 @@ const ListenTogetherPlayer = () => {
             variant="outlined"
             style={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }}
           />
-          {!connected && (
+          {!connected ? (
             <Chip
               label="Reconnecting..."
               color="secondary"
               size="small"
               style={{ marginLeft: 8 }}
             />
+          ) : (
+            <Chip
+              label={syncStatus.label}
+              size="small"
+              style={{
+                marginLeft: 8,
+                color: 'white',
+                borderColor: 'rgba(255,255,255,0.5)',
+                backgroundColor: syncStatus.color,
+              }}
+            />
           )}
+          <Tooltip title="Change display name">
+            <IconButton
+              color="inherit"
+              onClick={() => {
+                setNameInput(displayName)
+                setNameDialogOpen(true)
+              }}
+            >
+              <PersonIcon />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Leave Session">
             <IconButton color="inherit" onClick={handleLeave}>
               <LeaveIcon />
@@ -815,8 +950,23 @@ const ListenTogetherPlayer = () => {
       <Container className={classes.content}>
         <Grid container spacing={3}>
           {/* Now Playing + Controls */}
-          <Grid item xs={12} md={5}>
-            <Paper className={classes.nowPlaying} elevation={2}>
+          <Grid item xs={12} md={4}>
+            <Paper
+              className={classes.nowPlaying}
+              elevation={2}
+              style={{ position: 'relative', overflow: 'hidden' }}
+            >
+              {/* Floating emoji reactions */}
+              {floatingReactions.map((r, i) => (
+                <span
+                  key={r.id}
+                  className={classes.floatingReaction}
+                  style={{ left: `${15 + ((i * 17) % 70)}%` }}
+                  title={r.senderName}
+                >
+                  {r.emoji}
+                </span>
+              ))}
               <div className={classes.albumArt} style={{ position: 'relative' }}>
                 {currentTrack?.coverArt ? (
                   <img
@@ -1004,6 +1154,21 @@ const ListenTogetherPlayer = () => {
                   You have the remote
                 </Typography>
               )}
+
+              {/* Reaction bar — anyone can react */}
+              <div className={classes.reactionBar}>
+                {REACTION_EMOJIS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    className={classes.reactionButton}
+                    onClick={() => handleSendReaction(emoji)}
+                    aria-label={`React ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
             </Paper>
           </Grid>
 
@@ -1144,7 +1309,7 @@ const ListenTogetherPlayer = () => {
           </Grid>
 
           {/* Participants Panel */}
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} md={4}>
             <Paper className={classes.panel} elevation={2}>
               <Typography variant="h6" gutterBottom>
                 Participants
@@ -1208,6 +1373,58 @@ const ListenTogetherPlayer = () => {
                   </Button>
                 </>
               )}
+            </Paper>
+
+            {/* Chat Panel */}
+            <Paper className={classes.chatPanel} elevation={2}>
+              <Typography variant="h6" gutterBottom>
+                Chat
+              </Typography>
+              <div className={classes.chatMessages}>
+                {chatMessages.length === 0 && (
+                  <Typography variant="body2" color="textSecondary">
+                    No messages yet. Say hi!
+                  </Typography>
+                )}
+                {chatMessages.map((m) => (
+                  <div key={m.id} className={classes.chatLine}>
+                    <strong
+                      style={{
+                        color: m.senderId === myId ? '#1976d2' : undefined,
+                      }}
+                    >
+                      {m.senderName}
+                      {m.senderId === myId && ' (you)'}:
+                    </strong>{' '}
+                    <span>{m.text}</span>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+              <div className={classes.chatInputRow}>
+                <InputBase
+                  fullWidth
+                  placeholder="Type a message..."
+                  value={chatInput}
+                  inputProps={{ maxLength: 500 }}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleSendChat()}
+                  style={{
+                    border: '1px solid rgba(0,0,0,0.23)',
+                    borderRadius: 4,
+                    padding: '2px 8px',
+                  }}
+                />
+                <Button
+                  color="primary"
+                  variant="contained"
+                  size="small"
+                  onClick={handleSendChat}
+                  disabled={!chatInput.trim()}
+                >
+                  Send
+                </Button>
+              </div>
             </Paper>
           </Grid>
         </Grid>

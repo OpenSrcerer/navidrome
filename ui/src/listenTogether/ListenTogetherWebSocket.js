@@ -40,6 +40,9 @@ class ListenTogetherWebSocket {
     this.onWelcome = null
     this.onError = null
     this.onConnectionChange = null
+    this.onChat = null
+    this.onChatHistory = null
+    this.onReaction = null
   }
 
   connect() {
@@ -181,6 +184,33 @@ class ListenTogetherWebSocket {
               ? JSON.parse(msg.payload)
               : msg.payload
           this.onError(data)
+        }
+        break
+      case 'chat':
+        if (this.onChat) {
+          const data =
+            typeof msg.payload === 'string'
+              ? JSON.parse(msg.payload)
+              : msg.payload
+          this.onChat(data)
+        }
+        break
+      case 'chat_history':
+        if (this.onChatHistory) {
+          const data =
+            typeof msg.payload === 'string'
+              ? JSON.parse(msg.payload)
+              : msg.payload
+          this.onChatHistory(data)
+        }
+        break
+      case 'reaction':
+        if (this.onReaction) {
+          const data =
+            typeof msg.payload === 'string'
+              ? JSON.parse(msg.payload)
+              : msg.payload
+          this.onReaction(data)
         }
         break
       default:

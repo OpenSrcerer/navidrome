@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,6 +85,22 @@ type RemotePayload struct {
 	HolderName string `json:"holderName"`
 }
 
+// ChatMessage is a single chat line, broadcast live and kept in a short history
+// so that participants who join later see recent context.
+type ChatMessage struct {
+	ID         string `json:"id"`
+	SenderID   string `json:"senderId"`
+	SenderName string `json:"senderName"`
+	Text       string `json:"text"`
+	Timestamp  int64  `json:"ts"`
+}
+
+const (
+	maxChatHistory = 50
+	maxChatLen     = 500
+	maxEmojiLen    = 16
+)
+
 // LiveSession holds the runtime state of an active listening session.
 type LiveSession struct {
 	mu           sync.RWMutex
@@ -104,7 +121,8 @@ type LiveSession struct {
 	remoteHolder string // Participant ID who has the remote
 	participants map[string]*Participant
 	graceTimer   *time.Timer
-	advanceTimer *time.Timer // Fires when the current track is expected to end
+	advanceTimer *time.Timer   // Fires when the current track is expected to end
+	chatHistory  []ChatMessage // Recent chat lines (capped at maxChatHistory)
 	hub          *Hub
 }
 
@@ -408,6 +426,10 @@ func (ls *LiveSession) HandleMessage(sender *Participant, msg WSMessage) {
 		ls.handleQueueRemove(sender, msg.Payload)
 	case "queue_reorder":
 		ls.handleQueueReorder(sender, msg.Payload)
+	case "chat":
+		ls.handleChat(sender, msg.Payload)
+	case "reaction":
+		ls.handleReaction(sender, msg.Payload)
 	case "end_session":
 		ls.handleEndSession(sender)
 	default:
@@ -778,6 +800,78 @@ func (ls *LiveSession) handleEndSession(sender *Participant) {
 	ls.hub.removeSession(ls.sessionID)
 }
 
+// handleChat broadcasts a chat line from any participant and appends it to the
+// session's short history. The remote is not required — everyone can chat.
+func (ls *LiveSession) handleChat(sender *Participant, payload json.RawMessage) {
+	var data struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return
+	}
+	text := strings.TrimSpace(data.Text)
+	if text == "" {
+		return
+	}
+	if len(text) > maxChatLen {
+		text = text[:maxChatLen]
+	}
+	msg := ChatMessage{
+		ID:         uuid.New().String(),
+		SenderID:   sender.ID,
+		SenderName: sender.Name,
+		Text:       text,
+		Timestamp:  time.Now().UnixMilli(),
+	}
+	ls.mu.Lock()
+	ls.chatHistory = append(ls.chatHistory, msg)
+	if len(ls.chatHistory) > maxChatHistory {
+		ls.chatHistory = ls.chatHistory[len(ls.chatHistory)-maxChatHistory:]
+	}
+	ls.mu.Unlock()
+
+	payloadOut, _ := json.Marshal(msg)
+	ls.broadcast(WSMessage{Type: "chat", Payload: payloadOut})
+}
+
+// handleReaction broadcasts an ephemeral emoji reaction from any participant.
+// Reactions are not persisted in history.
+func (ls *LiveSession) handleReaction(sender *Participant, payload json.RawMessage) {
+	var data struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return
+	}
+	if data.Emoji == "" || len(data.Emoji) > maxEmojiLen {
+		return
+	}
+	out, _ := json.Marshal(struct {
+		SenderID   string `json:"senderId"`
+		SenderName string `json:"senderName"`
+		Emoji      string `json:"emoji"`
+		Timestamp  int64  `json:"ts"`
+	}{sender.ID, sender.Name, data.Emoji, time.Now().UnixMilli()})
+	ls.broadcast(WSMessage{Type: "reaction", Payload: out})
+}
+
+// broadcast marshals and sends a message to every connected participant.
+func (ls *LiveSession) broadcast(m WSMessage) {
+	data, _ := json.Marshal(m)
+	ls.mu.RLock()
+	participants := make([]*Participant, 0, len(ls.participants))
+	for _, p := range ls.participants {
+		participants = append(participants, p)
+	}
+	ls.mu.RUnlock()
+	for _, p := range participants {
+		select {
+		case p.sendCh <- data:
+		default:
+		}
+	}
+}
+
 // broadcastState sends the current state to all participants.
 // The action parameter indicates what triggered the broadcast (e.g. "play", "seek", "queue_add"),
 // allowing clients to decide whether to apply the position or ignore it.
@@ -936,6 +1030,7 @@ func (ls *LiveSession) SendWelcome(p *Participant) {
 	if holder, ok := ls.participants[holderID]; ok {
 		holderName = holder.Name
 	}
+	chatHistory := append([]ChatMessage(nil), ls.chatHistory...)
 	ls.mu.RUnlock()
 
 	// Send welcome with participant's own ID
@@ -985,6 +1080,21 @@ func (ls *LiveSession) SendWelcome(p *Participant) {
 	select {
 	case p.sendCh <- remoteMsg:
 	default:
+	}
+
+	// Send recent chat history so the joiner has context.
+	if len(chatHistory) > 0 {
+		histPayload, _ := json.Marshal(struct {
+			Messages []ChatMessage `json:"messages"`
+		}{Messages: chatHistory})
+		histMsg, _ := json.Marshal(WSMessage{
+			Type:    "chat_history",
+			Payload: histPayload,
+		})
+		select {
+		case p.sendCh <- histMsg:
+		default:
+		}
 	}
 }
 
