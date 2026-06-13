@@ -16,6 +16,7 @@ import (
 	"github.com/navidrome/navidrome/consts"
 	"github.com/navidrome/navidrome/core"
 	"github.com/navidrome/navidrome/core/auth"
+	"github.com/navidrome/navidrome/core/external"
 	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
@@ -36,18 +37,20 @@ type Router struct {
 	ds             model.DataStore
 	listenTogether core.ListenTogether
 	streamer       stream.MediaStreamer
+	provider       external.Provider
 	hub            *Hub
 	assetsHandler  http.Handler
 }
 
 // New creates a new Listen Together router for authenticated API endpoints.
-func New(ds model.DataStore, listenTogether core.ListenTogether, streamer stream.MediaStreamer) *Router {
+func New(ds model.DataStore, listenTogether core.ListenTogether, streamer stream.MediaStreamer, provider external.Provider) *Router {
 	ltRoot := path.Join(conf.Server.BasePath, consts.URLPathListenTogether)
 	r := &Router{
 		ds:             ds,
 		listenTogether: listenTogether,
 		streamer:       streamer,
-		hub:            NewHub(ds),
+		provider:       provider,
+		hub:            NewHub(ds, provider),
 		assetsHandler:  http.StripPrefix(ltRoot, http.FileServer(http.FS(ui.BuildAssets()))),
 	}
 	r.Handler = r.routes()

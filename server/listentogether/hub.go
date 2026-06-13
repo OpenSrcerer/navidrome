@@ -14,8 +14,10 @@ import (
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/consts"
 	"github.com/navidrome/navidrome/core/auth"
+	"github.com/navidrome/navidrome/core/external"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/request"
 )
 
 const (
@@ -154,13 +156,15 @@ type Hub struct {
 	mu       sync.RWMutex
 	sessions map[string]*LiveSession
 	ds       model.DataStore
+	provider external.Provider
 }
 
 // NewHub creates a new Hub.
-func NewHub(ds model.DataStore) *Hub {
+func NewHub(ds model.DataStore, provider external.Provider) *Hub {
 	return &Hub{
 		sessions: make(map[string]*LiveSession),
 		ds:       ds,
+		provider: provider,
 	}
 }
 
@@ -454,6 +458,8 @@ func (ls *LiveSession) HandleMessage(sender *Participant, msg WSMessage) {
 		ls.handleQueueRemove(sender, msg.Payload)
 	case "queue_reorder":
 		ls.handleQueueReorder(sender, msg.Payload)
+	case "queue_similar":
+		ls.handleQueueSimilar(sender, msg.Payload)
 	case "chat":
 		ls.handleChat(sender, msg.Payload)
 	case "reaction":
@@ -776,6 +782,55 @@ func (ls *LiveSession) handleQueueAdd(sender *Participant, payload json.RawMessa
 	newIdx := len(ls.tracks)
 	ls.tracks = append(ls.tracks, track)
 	ls.queue = append(ls.queue, newIdx)
+	ls.mu.Unlock()
+
+	ls.broadcastState("queue_add")
+}
+
+// handleQueueSimilar appends tracks similar to the given one — the same
+// "instant mix" mechanism used elsewhere (external.Provider.SimilarSongs) — to
+// the queue in a single broadcast. Holder only.
+func (ls *LiveSession) handleQueueSimilar(sender *Participant, payload json.RawMessage) {
+	if !ls.isRemoteHolder(sender) {
+		ls.sendError(sender, "only the remote holder can modify the queue")
+		return
+	}
+	if ls.hub.provider == nil {
+		ls.sendError(sender, "similar tracks not available")
+		return
+	}
+	var data struct {
+		MediaFileID string `json:"mediaFileId"`
+	}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		ls.sendError(sender, "invalid queue_similar payload")
+		return
+	}
+
+	// Run under the session creator's context, like the search endpoint.
+	ctx := request.WithUser(context.Background(), model.User{ID: ls.hostUserID, IsAdmin: true})
+	similar, err := ls.hub.provider.SimilarSongs(ctx, data.MediaFileID, 20)
+	if err != nil || len(similar) == 0 {
+		ls.sendError(sender, "no similar tracks found")
+		return
+	}
+
+	ls.mu.Lock()
+	for _, mf := range similar {
+		token := generateStreamToken(mf.ID, ls.format, ls.maxBitRate)
+		idx := len(ls.tracks)
+		ls.tracks = append(ls.tracks, TrackInfo{
+			ID:          mf.ID,
+			Token:       token,
+			Title:       mf.Title,
+			Artist:      mf.Artist,
+			Album:       mf.Album,
+			Duration:    mf.Duration,
+			MediaFileID: mf.ID,
+			CoverArt:    coverArtURL(mf),
+		})
+		ls.queue = append(ls.queue, idx)
+	}
 	ls.mu.Unlock()
 
 	ls.broadcastState("queue_add")

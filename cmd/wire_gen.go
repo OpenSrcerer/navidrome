@@ -218,7 +218,13 @@ func CreateListenTogetherRouter() *listentogether.Router {
 	fFmpeg := ffmpeg.New()
 	transcodingCache := stream.GetTranscodingCache()
 	mediaStreamer := stream.NewMediaStreamer(dataStore, fFmpeg, transcodingCache)
-	router := listentogether.New(dataStore, listenTogether, mediaStreamer)
+	broker := events.GetBroker()
+	metricsMetrics := metrics.GetPrometheusInstance(dataStore)
+	manager := plugins.GetManager(dataStore, broker, metricsMetrics)
+	agentsAgents := agents.GetAgents(dataStore, manager)
+	matcherMatcher := matcher.New(dataStore)
+	provider := external.NewProvider(dataStore, agentsAgents, matcherMatcher)
+	router := listentogether.New(dataStore, listenTogether, mediaStreamer, provider)
 	return router
 }
 

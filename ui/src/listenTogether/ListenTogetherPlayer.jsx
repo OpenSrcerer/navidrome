@@ -46,6 +46,10 @@ import {
   VolumeUp as VolumeUpIcon,
   VolumeOff as VolumeOffIcon,
   DragIndicator as DragIcon,
+  Sync as SyncIcon,
+  SyncDisabled as SyncDisabledIcon,
+  HourglassEmpty as HourglassIcon,
+  QueueMusic as QueueMusicIcon,
 } from '@material-ui/icons'
 import { DndProvider, useDrag, useDrop } from 'react-dnd'
 import { HTML5Backend } from 'react-dnd-html5-backend'
@@ -212,7 +216,8 @@ const useStyles = makeStyles((theme) => ({
     marginTop: theme.spacing(3),
     display: 'flex',
     flexDirection: 'column',
-    height: 340,
+    flexGrow: 1,
+    minHeight: 300,
   },
   chatMessages: {
     flex: 1,
@@ -353,9 +358,6 @@ const ListenTogetherPlayer = () => {
   const [buffering, setBuffering] = useState(false)
   const [bufferedFraction, setBufferedFraction] = useState(0)
   const [sessionEnded, setSessionEnded] = useState(false)
-  // True while this (non-holder) client is actively nudging playbackRate to
-  // close a small drift gap.
-  const [correcting, setCorrecting] = useState(false)
   // Whether this client is following the live/group position+playback. Becomes
   // false when the user scrubs or toggles play/pause locally.
   const [following, setFollowing] = useState(true)
@@ -394,16 +396,30 @@ const ListenTogetherPlayer = () => {
     return pos
   }
 
-  // Local sync-health indicator shown in the app bar.
+  // Sync indicator shown in the app bar. It describes whether THIS listener is
+  // playing along with whoever holds the remote. The remote holder is the source
+  // of truth, so it has no sync state and the chip is hidden for them.
   const syncStatus = detached
-    ? { label: 'Browsing', color: '#6a1b9a' }
+    ? {
+        label: 'Browsing on your own',
+        color: '#6a1b9a',
+        icon: <SyncDisabledIcon />,
+        tooltip:
+          'You scrubbed or paused on your own, so you are no longer in sync. Use "Return to live" to rejoin the group.',
+      }
     : buffering
-      ? { label: 'Buffering', color: '#ed6c02' }
-      : isRemoteHolder
-        ? { label: 'Host', color: '#2e7d32' }
-        : correcting
-          ? { label: 'Syncing', color: '#1976d2' }
-          : { label: 'In sync', color: '#2e7d32' }
+      ? {
+          label: 'Buffering…',
+          color: '#ed6c02',
+          icon: <HourglassIcon />,
+          tooltip: 'Loading audio…',
+        }
+      : {
+          label: 'In sync',
+          color: '#2e7d32',
+          icon: <SyncIcon />,
+          tooltip: 'You are listening in sync with the group.',
+        }
 
   // Keep a ref in sync so stable callbacks (WS handlers, audio events) can read
   // the current remote-holder status without being re-created.
@@ -466,7 +482,6 @@ const ListenTogetherPlayer = () => {
           }
         }
         audio.playbackRate = 1.0
-        setCorrecting(false)
         setLocalPosition(target)
         return
       }
@@ -474,10 +489,8 @@ const ListenTogetherPlayer = () => {
       if (!isRemoteHolderRef.current && playing && absDrift > SOFT_THRESHOLD) {
         const rate = 1 - drift / CORRECTION_WINDOW
         audio.playbackRate = Math.max(0.94, Math.min(1.06, rate))
-        setCorrecting(true)
       } else {
         audio.playbackRate = 1.0
-        setCorrecting(false)
       }
     }
 
@@ -549,7 +562,6 @@ const ListenTogetherPlayer = () => {
           audio.playbackRate = 1.0
         }
         setLocalPosition(target)
-        setCorrecting(false)
         return
       }
 
@@ -637,13 +649,28 @@ const ListenTogetherPlayer = () => {
   }, [volume])
 
   // Track buffering state and how much of the current track is buffered, for the
-  // loading spinner and the buffered bar behind the scrubber.
+  // loading spinner and the buffered bar behind the scrubber. The "buffering"
+  // flag is debounced so the brief stall on a normal track change/seek doesn't
+  // flicker the indicator (which looked like a graphical glitch).
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
-    const onWaiting = () => setBuffering(true)
-    const onPlaying = () => setBuffering(false)
-    const onCanPlay = () => setBuffering(false)
+    let bufferTimer = null
+    const onWaiting = () => {
+      if (bufferTimer) return
+      bufferTimer = setTimeout(() => {
+        bufferTimer = null
+        setBuffering(true)
+      }, 600)
+    }
+    const onPlaying = () => {
+      if (bufferTimer) {
+        clearTimeout(bufferTimer)
+        bufferTimer = null
+      }
+      setBuffering(false)
+    }
+    const onCanPlay = onPlaying
     const updateBuffered = () => {
       try {
         if (audio.buffered.length && audio.duration) {
@@ -672,6 +699,7 @@ const ListenTogetherPlayer = () => {
       audio.removeEventListener('canplay', onCanPlay)
       audio.removeEventListener('progress', updateBuffered)
       audio.removeEventListener('timeupdate', updateBuffered)
+      if (bufferTimer) clearTimeout(bufferTimer)
     }
   }, [])
 
@@ -847,7 +875,6 @@ const ListenTogetherPlayer = () => {
         }
         setLocalPosition(newPosition)
         setFollowing(false)
-        setCorrecting(false)
       }
     },
     [isRemoteHolder, currentTrack],
@@ -875,7 +902,6 @@ const ListenTogetherPlayer = () => {
     setLocalPosition(target)
     setLocalPlaying(liveRef.current.isPlaying)
     setFollowing(true)
-    setCorrecting(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -921,6 +947,16 @@ const ListenTogetherPlayer = () => {
     (queuePosition) => {
       if (wsRef.current && isRemoteHolder) {
         wsRef.current.sendCommand('queue_remove', { queuePosition })
+      }
+    },
+    [isRemoteHolder],
+  )
+
+  // Add tracks similar to a given track (instant-mix) to the queue. Holder only.
+  const handleAddSimilar = useCallback(
+    (mediaFileId) => {
+      if (wsRef.current && isRemoteHolder && mediaFileId) {
+        wsRef.current.sendCommand('queue_similar', { mediaFileId })
       }
     },
     [isRemoteHolder],
@@ -1068,6 +1104,8 @@ const ListenTogetherPlayer = () => {
             variant="outlined"
             style={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }}
           />
+          {/* Sync chip: only for listeners. The remote holder is the source of
+              truth and has no sync state, so no chip is shown for them. */}
           {!connected ? (
             <Chip
               label="Reconnecting..."
@@ -1076,16 +1114,23 @@ const ListenTogetherPlayer = () => {
               style={{ marginLeft: 8 }}
             />
           ) : (
-            <Chip
-              label={syncStatus.label}
-              size="small"
-              style={{
-                marginLeft: 8,
-                color: 'white',
-                borderColor: 'rgba(255,255,255,0.5)',
-                backgroundColor: syncStatus.color,
-              }}
-            />
+            !isRemoteHolder && (
+              <Tooltip title={syncStatus.tooltip}>
+                <Chip
+                  icon={React.cloneElement(syncStatus.icon, {
+                    style: { color: 'white' },
+                    fontSize: 'small',
+                  })}
+                  label={syncStatus.label}
+                  size="small"
+                  style={{
+                    marginLeft: 8,
+                    color: 'white',
+                    backgroundColor: syncStatus.color,
+                  }}
+                />
+              </Tooltip>
+            )
           )}
           <Tooltip title="Change display name">
             <IconButton
@@ -1114,7 +1159,7 @@ const ListenTogetherPlayer = () => {
             <Paper
               className={classes.nowPlaying}
               elevation={2}
-              style={{ position: 'relative', overflow: 'hidden' }}
+              style={{ position: 'relative', overflow: 'hidden', height: '100%' }}
             >
               {/* Floating emoji reactions */}
               {floatingReactions.map((r, i) => (
@@ -1355,13 +1400,31 @@ const ListenTogetherPlayer = () => {
                 </Button>
               )}
               {isRemoteHolder && (
-                <Typography
-                  variant="caption"
-                  color="primary"
-                  style={{ marginTop: 8, display: 'block' }}
-                >
-                  You have the remote
-                </Typography>
+                <>
+                  <Typography
+                    variant="caption"
+                    color="primary"
+                    style={{ marginTop: 8, display: 'block' }}
+                  >
+                    You have the remote
+                  </Typography>
+                  <Tooltip title="Add tracks similar to this one (instant mix)">
+                    <span>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<QueueMusicIcon />}
+                        onClick={() =>
+                          handleAddSimilar(currentTrack?.mediaFileId)
+                        }
+                        disabled={!currentTrack}
+                        style={{ marginTop: 8 }}
+                      >
+                        Add similar to queue
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </>
               )}
 
               {/* Reaction bar — anyone can react */}
@@ -1517,9 +1580,18 @@ const ListenTogetherPlayer = () => {
             </Paper>
           </Grid>
 
-          {/* Participants Panel */}
-          <Grid item xs={12} md={4}>
-            <Paper className={classes.panel} elevation={2}>
+          {/* Participants + Chat (right column, chat fills remaining height) */}
+          <Grid
+            item
+            xs={12}
+            md={4}
+            style={{ display: 'flex', flexDirection: 'column' }}
+          >
+            <Paper
+              className={classes.panel}
+              elevation={2}
+              style={{ height: 'auto' }}
+            >
               <Typography variant="h6" gutterBottom>
                 Participants
               </Typography>
@@ -1550,7 +1622,6 @@ const ListenTogetherPlayer = () => {
                           )}
                         </span>
                       }
-                      secondary={p.isHost ? 'Host' : 'Guest'}
                     />
                     {isRemoteHolder && p.id !== myId && (
                       <ListItemSecondaryAction>
