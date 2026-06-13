@@ -21,10 +21,11 @@ const MAX_RECONNECT_DELAY = 30000
 const INITIAL_RECONNECT_DELAY = 1000
 
 class ListenTogetherWebSocket {
-  constructor(sessionId, displayName, isHost = false) {
+  constructor(sessionId, displayName, isHost = false, clientId = '') {
     this.sessionId = sessionId
     this.displayName = displayName
     this.isHost = isHost
+    this.clientId = clientId
     this.ws = null
     this.reconnectAttempts = 0
     this.reconnectTimer = null
@@ -48,6 +49,7 @@ class ListenTogetherWebSocket {
     const params = new URLSearchParams({
       name: this.displayName,
       host: this.isHost ? 'true' : 'false',
+      ...(this.clientId && { clientId: this.clientId }),
     })
     const url = `${protocol}//${host}/share/lt/${this.sessionId}/ws?${params}`
 

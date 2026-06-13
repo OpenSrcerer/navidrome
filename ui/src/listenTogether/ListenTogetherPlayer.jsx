@@ -139,6 +139,24 @@ const useStyles = makeStyles((theme) => ({
   },
 }))
 
+// Drift-correction tuning (seconds). Below SOFT we leave playback alone; between
+// SOFT and HARD we nudge playbackRate to converge smoothly; above HARD we hard-seek.
+const SOFT_THRESHOLD = 0.12
+const HARD_THRESHOLD = 1.0
+// Window over which a soft correction aims to eliminate the drift.
+const CORRECTION_WINDOW = 8
+// Actions that always force an exact position (explicit playback changes), as
+// opposed to "tick" updates which are only soft-corrected.
+const HARD_ACTIONS = [
+  'seek',
+  'skip_next',
+  'skip_prev',
+  'welcome',
+  'auto_advance',
+  'play',
+  'pause',
+]
+
 const formatTime = (seconds) => {
   if (!seconds || isNaN(seconds)) return '0:00'
   const mins = Math.floor(seconds / 60)
@@ -152,6 +170,28 @@ const ListenTogetherPlayer = () => {
   const audioRef = useRef(null)
   const syncIntervalRef = useRef(null)
   const currentTrackIndexRef = useRef(0)
+  // Estimated offset (ms) between the server clock and this client's clock,
+  // serverTime ≈ Date.now() + clockOffsetRef.current. Smoothed across messages.
+  const clockOffsetRef = useRef(null)
+  // Position (seconds) to seek to once the next track's source finishes loading.
+  const pendingSeekRef = useRef(null)
+  // Mirror of derived state for use inside stable event/WS callbacks.
+  const isRemoteHolderRef = useRef(false)
+  const isPlayingRef = useRef(false)
+
+  // A stable per-browser identity so reconnects keep remote-holder status.
+  const clientIdRef = useRef(null)
+  if (!clientIdRef.current) {
+    let cid = localStorage.getItem('lt_client_id')
+    if (!cid) {
+      cid =
+        window.crypto && window.crypto.randomUUID
+          ? window.crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      localStorage.setItem('lt_client_id', cid)
+    }
+    clientIdRef.current = cid
+  }
 
   // State
   const [myId, setMyId] = useState(null)
@@ -188,6 +228,17 @@ const ListenTogetherPlayer = () => {
 
   const sessionId = listenTogetherInfo?.id
 
+  // Keep a ref in sync so stable callbacks (WS handlers, audio events) can read
+  // the current remote-holder status without being re-created.
+  useEffect(() => {
+    isRemoteHolderRef.current = !!isRemoteHolder
+    // The holder is the source of truth and must play at normal speed; clear any
+    // leftover drift-correction nudge from when this client was a listener.
+    if (isRemoteHolder && audioRef.current) {
+      audioRef.current.playbackRate = 1.0
+    }
+  }, [isRemoteHolder])
+
   // Check if name was previously set
   useEffect(() => {
     const savedName = localStorage.getItem('lt_display_name')
@@ -201,8 +252,47 @@ const ListenTogetherPlayer = () => {
   useEffect(() => {
     if (!displayName || !sessionId || nameDialogOpen) return
 
-    const ws = new ListenTogetherWebSocket(sessionId, displayName, false)
+    const ws = new ListenTogetherWebSocket(
+      sessionId,
+      displayName,
+      false,
+      clientIdRef.current,
+    )
     wsRef.current = ws
+
+    // serverNow() estimates the current server wall-clock from our local clock.
+    const serverNow = () => Date.now() + (clockOffsetRef.current || 0)
+
+    // Apply a position update to the local audio element. Explicit actions and
+    // large drift hard-seek; small drift (ticks) is corrected by nudging
+    // playbackRate so it converges smoothly without an audible jump. The remote
+    // holder is the source of truth and never soft-corrects itself.
+    const applyPositionCorrection = (target, action, playing) => {
+      const audio = audioRef.current
+      if (!audio) return
+      const drift = audio.currentTime - target // >0 means we are ahead
+      const absDrift = Math.abs(drift)
+
+      if (HARD_ACTIONS.includes(action) || absDrift > HARD_THRESHOLD) {
+        if (absDrift > 0.05) {
+          try {
+            audio.currentTime = target
+          } catch {
+            /* seeking before metadata is ready — ignore */
+          }
+        }
+        audio.playbackRate = 1.0
+        setLocalPosition(target)
+        return
+      }
+
+      if (!isRemoteHolderRef.current && playing && absDrift > SOFT_THRESHOLD) {
+        const rate = 1 - drift / CORRECTION_WINDOW
+        audio.playbackRate = Math.max(0.94, Math.min(1.06, rate))
+      } else {
+        audio.playbackRate = 1.0
+      }
+    }
 
     ws.onWelcome = (data) => {
       setMyId(data.yourId)
@@ -210,30 +300,47 @@ const ListenTogetherPlayer = () => {
 
     ws.onState = (state) => {
       setQueue(state.queue || [])
-      setIsPlaying(state.isPlaying || false)
+      const playing = state.isPlaying || false
+      setIsPlaying(playing)
+      isPlayingRef.current = playing
+
+      // Update our estimate of the server clock (smoothed).
+      if (typeof state.serverTime === 'number' && state.serverTime > 0) {
+        const raw = state.serverTime - Date.now()
+        clockOffsetRef.current =
+          clockOffsetRef.current == null
+            ? raw
+            : clockOffsetRef.current * 0.8 + raw * 0.2
+      }
 
       const newTrackIndex = state.currentTrackIndex || 0
       const prevTrackIndex = currentTrackIndexRef.current
       setCurrentTrackIndex(newTrackIndex)
       currentTrackIndexRef.current = newTrackIndex
 
-      // Only force-seek audio position on explicit playback actions or
-      // track changes. Queue-only updates and play/pause should NOT touch
-      // the position — the client tracks its own position locally via the
-      // audio element's timeupdate event, which keeps the progress bar
-      // smooth and avoids periodic jumps.
       const action = state.action || ''
-      const trackChanged = newTrackIndex !== prevTrackIndex
-      const isPositionAction = ['seek', 'skip_next', 'skip_prev', 'welcome'].includes(action)
 
-      if (trackChanged || isPositionAction) {
-        const newPosition = state.position || 0
-        setLocalPosition(newPosition)
-        const audio = audioRef.current
-        if (audio) {
-          audio.currentTime = newPosition
-        }
+      // Latency-compensated target: the authoritative position was captured at
+      // state.serverTime; if playing, add the time elapsed since then.
+      let target = state.position || 0
+      if (playing && typeof state.serverTime === 'number' && state.serverTime > 0) {
+        const elapsed = (serverNow() - state.serverTime) / 1000
+        if (elapsed > 0) target += elapsed
       }
+
+      const trackChanged = newTrackIndex !== prevTrackIndex
+      if (trackChanged) {
+        // The source effect will load the new track; defer the seek until the
+        // audio is ready (handled on the 'canplay' event).
+        pendingSeekRef.current = target
+        setLocalPosition(target)
+        return
+      }
+
+      // Queue-only updates (add/remove/reorder) must not disturb playback.
+      if (action.startsWith('queue_')) return
+
+      applyPositionCorrection(target, action, playing)
     }
 
     ws.onParticipants = (data) => {
@@ -279,28 +386,70 @@ const ListenTogetherPlayer = () => {
     return () => audio.removeEventListener('timeupdate', handleTimeUpdate)
   }, [])
 
-  // Audio source and play/pause sync.
-  // Position seeking is handled in the onState callback above — this effect
-  // only manages source changes and play/pause toggling.
+  // Load the audio source ONLY when the track itself changes (keyed on the
+  // track id, not the array object), so unrelated state updates — queue edits,
+  // ticks, participant changes — never reload or restart playback. A pending
+  // seek (set on track change / late join) is applied once the new source is
+  // buffered, then playback resumes if the session is playing.
   useEffect(() => {
     if (!currentTrack || !connected) return
-
     const audio = audioRef.current
     if (!audio) return
 
     const streamUrl = `/share/lt/s/${currentTrack.token}`
-    if (audio.src !== window.location.origin + streamUrl) {
-      audio.src = streamUrl
-    }
+    const fullUrl = window.location.origin + streamUrl
+    if (audio.src === fullUrl) return
 
+    audio.src = streamUrl
+    const onCanPlay = () => {
+      if (pendingSeekRef.current != null) {
+        try {
+          audio.currentTime = pendingSeekRef.current
+        } catch {
+          /* ignore */
+        }
+        pendingSeekRef.current = null
+      }
+      if (isPlayingRef.current) {
+        audio.play().catch(() => {})
+      }
+    }
+    audio.addEventListener('canplay', onCanPlay, { once: true })
+    return () => audio.removeEventListener('canplay', onCanPlay)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack?.id, currentTrack?.token, connected])
+
+  // Toggle play/pause on the already-loaded source when the session's playing
+  // state changes. Track loading + initial play is handled by the effect above.
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio || !connected || !currentTrack) return
     if (isPlaying) {
       audio.play().catch(() => {})
     } else {
       audio.pause()
     }
-  }, [currentTrack, isPlaying, connected])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, connected])
 
-  // Send periodic sync if remote holder
+  // When the holder's track finishes, tell the server so it can advance the
+  // queue. This is a fallback for the server's own advance timer (which handles
+  // backgrounded tabs and is the primary mechanism); the server ignores it
+  // unless we genuinely appear to be at the end, making the two idempotent.
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const onEnded = () => {
+      if (isRemoteHolderRef.current && wsRef.current) {
+        wsRef.current.sendCommand('track_ended')
+      }
+    }
+    audio.addEventListener('ended', onEnded)
+    return () => audio.removeEventListener('ended', onEnded)
+  }, [])
+
+  // Send periodic sync if remote holder. This refreshes the server's
+  // authoritative clock and drives drift correction for the other listeners.
   useEffect(() => {
     if (!isRemoteHolder || !connected) {
       if (syncIntervalRef.current) {
@@ -315,17 +464,17 @@ const ListenTogetherPlayer = () => {
       if (audio && wsRef.current) {
         wsRef.current.sendCommand('sync', {
           position: audio.currentTime,
-          trackIndex: currentTrackIndex,
+          trackIndex: currentTrackIndexRef.current,
         })
       }
-    }, 3000)
+    }, 2000)
 
     return () => {
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current)
       }
     }
-  }, [isRemoteHolder, connected, currentTrackIndex])
+  }, [isRemoteHolder, connected])
 
   // Name dialog
   const handleNameSubmit = () => {
