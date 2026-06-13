@@ -147,7 +147,49 @@ const useStyles = makeStyles((theme) => ({
   },
   panel: {
     padding: theme.spacing(2),
-    height: '100%',
+  },
+  // On desktop the three columns share one fixed-height row so the blocks are
+  // uniform and aligned; each column fills it and scrolls internally. On mobile
+  // they stack with natural heights.
+  mainGrid: {
+    [theme.breakpoints.up('md')]: {
+      height: 'calc(100vh - 112px)',
+      flexWrap: 'nowrap',
+    },
+  },
+  fillCol: {
+    [theme.breakpoints.up('md')]: {
+      height: '100%',
+    },
+  },
+  nowPlayingFill: {
+    [theme.breakpoints.up('md')]: {
+      height: '100%',
+      marginBottom: 0,
+      overflowY: 'auto',
+    },
+  },
+  queueFill: {
+    [theme.breakpoints.up('md')]: {
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 0,
+    },
+  },
+  queueScroll: {
+    [theme.breakpoints.up('md')]: {
+      flex: 1,
+      overflowY: 'auto',
+      minHeight: 0,
+    },
+  },
+  participantsFill: {
+    [theme.breakpoints.up('md')]: {
+      flexShrink: 0,
+      maxHeight: '45%',
+      overflowY: 'auto',
+    },
   },
   queueItem: {
     '&.active': {
@@ -1153,13 +1195,13 @@ const ListenTogetherPlayer = () => {
 
       {/* Main Content */}
       <Container className={classes.content}>
-        <Grid container spacing={3}>
+        <Grid container spacing={3} className={classes.mainGrid}>
           {/* Now Playing + Controls */}
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={4} className={classes.fillCol}>
             <Paper
-              className={classes.nowPlaying}
+              className={`${classes.nowPlaying} ${classes.nowPlayingFill}`}
               elevation={2}
-              style={{ position: 'relative', overflow: 'hidden', height: '100%' }}
+              style={{ position: 'relative' }}
             >
               {/* Floating emoji reactions */}
               {floatingReactions.map((r, i) => (
@@ -1400,31 +1442,13 @@ const ListenTogetherPlayer = () => {
                 </Button>
               )}
               {isRemoteHolder && (
-                <>
-                  <Typography
-                    variant="caption"
-                    color="primary"
-                    style={{ marginTop: 8, display: 'block' }}
-                  >
-                    You have the remote
-                  </Typography>
-                  <Tooltip title="Add tracks similar to this one (instant mix)">
-                    <span>
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        startIcon={<QueueMusicIcon />}
-                        onClick={() =>
-                          handleAddSimilar(currentTrack?.mediaFileId)
-                        }
-                        disabled={!currentTrack}
-                        style={{ marginTop: 8 }}
-                      >
-                        Add similar to queue
-                      </Button>
-                    </span>
-                  </Tooltip>
-                </>
+                <Typography
+                  variant="caption"
+                  color="primary"
+                  style={{ marginTop: 8, display: 'block' }}
+                >
+                  You have the remote
+                </Typography>
               )}
 
               {/* Reaction bar — anyone can react */}
@@ -1445,8 +1469,11 @@ const ListenTogetherPlayer = () => {
           </Grid>
 
           {/* Queue Panel */}
-          <Grid item xs={12} md={4}>
-            <Paper className={classes.panel} elevation={2}>
+          <Grid item xs={12} md={4} className={classes.fillCol}>
+            <Paper
+              className={`${classes.panel} ${classes.queueFill}`}
+              elevation={2}
+            >
               <Typography variant="h6" gutterBottom>
                 Queue
               </Typography>
@@ -1489,13 +1516,24 @@ const ListenTogetherPlayer = () => {
                               secondary={`${result.artist} - ${result.album}`}
                             />
                             <ListItemSecondaryAction>
-                              <IconButton
-                                edge="end"
-                                size="small"
-                                onClick={() => handleAddToQueue(result.id)}
-                              >
-                                <AddIcon />
-                              </IconButton>
+                              <Tooltip title="Add to queue">
+                                <IconButton
+                                  edge="end"
+                                  size="small"
+                                  onClick={() => handleAddToQueue(result.id)}
+                                >
+                                  <AddIcon />
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Add similar tracks (instant mix)">
+                                <IconButton
+                                  edge="end"
+                                  size="small"
+                                  onClick={() => handleAddSimilar(result.id)}
+                                >
+                                  <QueueMusicIcon />
+                                </IconButton>
+                              </Tooltip>
                             </ListItemSecondaryAction>
                           </ListItem>
                         ))}
@@ -1513,7 +1551,8 @@ const ListenTogetherPlayer = () => {
                 </Typography>
               )}
 
-              {/* Queue List */}
+              {/* Queue List (scrolls within the column) */}
+              <div className={classes.queueScroll}>
               <List dense>
                 {queue.map((track, index) => (
                   <DraggableQueueItem
@@ -1577,6 +1616,7 @@ const ListenTogetherPlayer = () => {
                   </ListItem>
                 )}
               </List>
+              </div>
             </Paper>
           </Grid>
 
@@ -1585,12 +1625,12 @@ const ListenTogetherPlayer = () => {
             item
             xs={12}
             md={4}
+            className={classes.fillCol}
             style={{ display: 'flex', flexDirection: 'column' }}
           >
             <Paper
-              className={classes.panel}
+              className={`${classes.panel} ${classes.participantsFill}`}
               elevation={2}
-              style={{ height: 'auto' }}
             >
               <Typography variant="h6" gutterBottom>
                 Participants
