@@ -20,6 +20,8 @@ import {
   ListItemIcon,
   ListItemSecondaryAction,
   ListItemText,
+  Menu,
+  MenuItem,
   Paper,
   Slider,
   TextField,
@@ -29,7 +31,6 @@ import {
 } from '@material-ui/core'
 import { makeStyles } from '@material-ui/core/styles'
 import {
-  Delete as DeleteIcon,
   MusicNote as MusicNoteIcon,
   Pause as PauseIcon,
   Person as PersonIcon,
@@ -48,6 +49,7 @@ import {
   SyncDisabled as SyncDisabledIcon,
   HourglassEmpty as HourglassIcon,
   QueueMusic as QueueMusicIcon,
+  MoreVert as MoreVertIcon,
 } from '@material-ui/icons'
 import { DndProvider, useDrag, useDrop } from 'react-dnd'
 import { HTML5Backend } from 'react-dnd-html5-backend'
@@ -86,6 +88,45 @@ const DraggableQueueItem = ({ index, canDrag, onDropItem, children }) => {
     >
       {children}
     </div>
+  )
+}
+
+// TrackContextMenu is a lightweight three-dots menu (mirroring Navidrome's
+// SongContextMenu) for per-track actions. `items` is a list of
+// { label, onClick, disabled? }; falsy entries are ignored.
+const TrackContextMenu = ({ items }) => {
+  const [anchorEl, setAnchorEl] = useState(null)
+  const valid = items.filter(Boolean)
+  if (valid.length === 0) return null
+  const open = (e) => {
+    e.stopPropagation()
+    setAnchorEl(e.currentTarget)
+  }
+  const close = (e) => {
+    e?.stopPropagation?.()
+    setAnchorEl(null)
+  }
+  return (
+    <>
+      <IconButton edge="end" size="small" onClick={open} aria-label="Track actions">
+        <MoreVertIcon fontSize="small" />
+      </IconButton>
+      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={close}>
+        {valid.map((it) => (
+          <MenuItem
+            key={it.label}
+            disabled={it.disabled}
+            onClick={(e) => {
+              e.stopPropagation()
+              setAnchorEl(null)
+              it.onClick()
+            }}
+          >
+            {it.label}
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
   )
 }
 
@@ -1332,15 +1373,21 @@ const ListenTogetherPlayer = () => {
                         },
                       }}
                     />
-                    {isRemoteHolder && index !== currentTrackIndex && (
+                    {isRemoteHolder && (
                       <ListItemSecondaryAction>
-                        <IconButton
-                          edge="end"
-                          size="small"
-                          onClick={() => handleRemoveFromQueue(index)}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
+                        <TrackContextMenu
+                          items={[
+                            {
+                              label: 'Add similar tracks',
+                              onClick: () =>
+                                handleAddSimilar(track.mediaFileId),
+                            },
+                            index !== currentTrackIndex && {
+                              label: 'Remove from queue',
+                              onClick: () => handleRemoveFromQueue(index),
+                            },
+                          ]}
+                        />
                       </ListItemSecondaryAction>
                     )}
                   </ListItem>
