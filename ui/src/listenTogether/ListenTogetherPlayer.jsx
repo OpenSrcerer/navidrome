@@ -23,6 +23,7 @@ import {
   ListItemSecondaryAction,
   ListItemText,
   Paper,
+  Slider,
   TextField,
   Toolbar,
   Tooltip,
@@ -42,9 +43,49 @@ import {
   Add as AddIcon,
   ExitToApp as LeaveIcon,
   SwapHoriz as SwapIcon,
+  VolumeUp as VolumeUpIcon,
+  VolumeOff as VolumeOffIcon,
+  DragIndicator as DragIcon,
 } from '@material-ui/icons'
+import { DndProvider, useDrag, useDrop } from 'react-dnd'
+import { HTML5Backend } from 'react-dnd-html5-backend'
 import { listenTogetherInfo } from '../config'
 import ListenTogetherWebSocket from './ListenTogetherWebSocket'
+
+const QUEUE_ITEM_TYPE = 'LT_QUEUE_ITEM'
+
+// DraggableQueueItem wraps a queue row so the remote holder can drag it onto
+// another row to reorder the queue. The reorder command is sent once, on drop,
+// and the UI updates from the server broadcast (no optimistic local state).
+const DraggableQueueItem = ({ index, canDrag, onDropItem, children }) => {
+  const ref = useRef(null)
+  const [{ isOver }, drop] = useDrop({
+    accept: QUEUE_ITEM_TYPE,
+    canDrop: () => canDrag,
+    drop: (item) => {
+      if (item.index !== index) onDropItem(item.index, index)
+    },
+    collect: (monitor) => ({ isOver: monitor.isOver() && canDrag }),
+  })
+  const [{ isDragging }, drag] = useDrag({
+    type: QUEUE_ITEM_TYPE,
+    item: { index },
+    canDrag,
+    collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+  })
+  drag(drop(ref))
+  return (
+    <div
+      ref={ref}
+      style={{
+        opacity: isDragging ? 0.4 : 1,
+        borderTop: isOver ? '2px solid #1976d2' : '2px solid transparent',
+      }}
+    >
+      {children}
+    </div>
+  )
+}
 
 const useStyles = makeStyles((theme) => ({
   root: {
@@ -223,6 +264,15 @@ const ListenTogetherPlayer = () => {
   // Remote request state
   const [remoteRequest, setRemoteRequest] = useState(null)
 
+  // Playback UX state
+  const [volume, setVolume] = useState(() => {
+    const v = parseFloat(localStorage.getItem('lt_volume'))
+    return isNaN(v) ? 1 : v
+  })
+  const [buffering, setBuffering] = useState(false)
+  const [bufferedFraction, setBufferedFraction] = useState(0)
+  const [sessionEnded, setSessionEnded] = useState(false)
+
   const isRemoteHolder = myId && remoteHolder.holderId === myId
   const currentTrack = queue[currentTrackIndex]
 
@@ -358,7 +408,7 @@ const ListenTogetherPlayer = () => {
     ws.onError = (data) => {
       if (data?.action === 'session_ended') {
         setConnected(false)
-        alert('The session has ended.')
+        setSessionEnded(true)
       }
     }
 
@@ -385,6 +435,56 @@ const ListenTogetherPlayer = () => {
     audio.addEventListener('timeupdate', handleTimeUpdate)
     return () => audio.removeEventListener('timeupdate', handleTimeUpdate)
   }, [])
+
+  // Apply the (persisted) volume to the audio element.
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume
+    localStorage.setItem('lt_volume', String(volume))
+  }, [volume])
+
+  // Track buffering state and how much of the current track is buffered, for the
+  // loading spinner and the buffered bar behind the scrubber.
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const onWaiting = () => setBuffering(true)
+    const onPlaying = () => setBuffering(false)
+    const onCanPlay = () => setBuffering(false)
+    const updateBuffered = () => {
+      try {
+        if (audio.buffered.length && audio.duration) {
+          setBufferedFraction(
+            audio.buffered.end(audio.buffered.length - 1) / audio.duration,
+          )
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    audio.addEventListener('waiting', onWaiting)
+    audio.addEventListener('stalled', onWaiting)
+    audio.addEventListener('seeking', onWaiting)
+    audio.addEventListener('playing', onPlaying)
+    audio.addEventListener('seeked', onPlaying)
+    audio.addEventListener('canplay', onCanPlay)
+    audio.addEventListener('progress', updateBuffered)
+    audio.addEventListener('timeupdate', updateBuffered)
+    return () => {
+      audio.removeEventListener('waiting', onWaiting)
+      audio.removeEventListener('stalled', onWaiting)
+      audio.removeEventListener('seeking', onWaiting)
+      audio.removeEventListener('playing', onPlaying)
+      audio.removeEventListener('seeked', onPlaying)
+      audio.removeEventListener('canplay', onCanPlay)
+      audio.removeEventListener('progress', updateBuffered)
+      audio.removeEventListener('timeupdate', updateBuffered)
+    }
+  }, [])
+
+  // Reset the buffered indicator when the track changes.
+  useEffect(() => {
+    setBufferedFraction(0)
+  }, [currentTrack?.id])
 
   // Load the audio source ONLY when the track itself changes (keyed on the
   // track id, not the array object), so unrelated state updates — queue edits,
@@ -512,18 +612,20 @@ const ListenTogetherPlayer = () => {
   }, [isRemoteHolder])
 
   const handleSeek = useCallback(
-    (e) => {
+    (newPosition) => {
       if (!isRemoteHolder || !currentTrack) return
-      const bar = e.currentTarget
-      const rect = bar.getBoundingClientRect()
-      const ratio = (e.clientX - rect.left) / rect.width
-      const newPosition = ratio * currentTrack.duration
       if (wsRef.current) {
         wsRef.current.sendCommand('seek', { position: newPosition })
       }
     },
     [isRemoteHolder, currentTrack],
   )
+
+  // While dragging the scrubber, show the dragged position locally for instant
+  // feedback; the actual seek is sent on release (onChangeCommitted).
+  const handleScrubChange = useCallback((_e, value) => {
+    setLocalPosition(value)
+  }, [])
 
   // Search
   const handleSearch = useCallback(async () => {
@@ -560,6 +662,15 @@ const ListenTogetherPlayer = () => {
     (queuePosition) => {
       if (wsRef.current && isRemoteHolder) {
         wsRef.current.sendCommand('queue_remove', { queuePosition })
+      }
+    },
+    [isRemoteHolder],
+  )
+
+  const handleReorder = useCallback(
+    (from, to) => {
+      if (wsRef.current && isRemoteHolder && from !== to) {
+        wsRef.current.sendCommand('queue_reorder', { from, to })
       }
     },
     [isRemoteHolder],
@@ -607,14 +718,24 @@ const ListenTogetherPlayer = () => {
     window.close()
   }, [])
 
-  const progressPercent = currentTrack
-    ? (localPosition / currentTrack.duration) * 100
-    : 0
-
   return (
+    <DndProvider backend={HTML5Backend}>
     <div className={classes.root}>
       {/* Hidden audio element for playback */}
       <audio ref={audioRef} />
+
+      {/* Session Ended Dialog */}
+      <Dialog open={sessionEnded} disableBackdropClick>
+        <DialogTitle>Session Ended</DialogTitle>
+        <DialogContent>
+          <Typography>This Listen Together session has ended.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleLeave} color="primary">
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Name Entry Dialog */}
       <Dialog open={nameDialogOpen} disableBackdropClick disableEscapeKeyDown>
@@ -696,8 +817,42 @@ const ListenTogetherPlayer = () => {
           {/* Now Playing + Controls */}
           <Grid item xs={12} md={5}>
             <Paper className={classes.nowPlaying} elevation={2}>
-              <div className={classes.albumArt}>
-                <MusicNoteIcon style={{ fontSize: 80, color: '#999' }} />
+              <div className={classes.albumArt} style={{ position: 'relative' }}>
+                {currentTrack?.coverArt ? (
+                  <img
+                    src={currentTrack.coverArt}
+                    alt={currentTrack.album || currentTrack.title}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                      borderRadius: 8,
+                    }}
+                    onError={(e) => {
+                      e.target.style.display = 'none'
+                    }}
+                  />
+                ) : (
+                  <MusicNoteIcon style={{ fontSize: 80, color: '#999' }} />
+                )}
+                {buffering && isPlaying && (
+                  <Box
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: 'rgba(0,0,0,0.35)',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <CircularProgress style={{ color: '#fff' }} />
+                  </Box>
+                )}
               </div>
               {currentTrack ? (
                 <>
@@ -717,15 +872,29 @@ const ListenTogetherPlayer = () => {
                 </Typography>
               )}
 
-              {/* Progress Bar */}
-              <Box
-                className={classes.progressBar}
-                onClick={isRemoteHolder ? handleSeek : undefined}
-                style={{ cursor: isRemoteHolder ? 'pointer' : 'default' }}
-              >
+              {/* Progress Bar — draggable scrubber for the remote holder, with a
+                  buffered-amount indicator behind it. */}
+              <Box className={classes.progressBar} style={{ position: 'relative' }}>
                 <LinearProgress
                   variant="determinate"
-                  value={Math.min(progressPercent, 100)}
+                  value={Math.min(bufferedFraction * 100, 100)}
+                  style={{
+                    position: 'absolute',
+                    top: 12,
+                    left: 0,
+                    right: 0,
+                    opacity: 0.3,
+                  }}
+                />
+                <Slider
+                  value={Math.min(localPosition, currentTrack?.duration || 0)}
+                  min={0}
+                  max={currentTrack?.duration || 0}
+                  step={0.1}
+                  disabled={!isRemoteHolder || !currentTrack}
+                  onChange={handleScrubChange}
+                  onChangeCommitted={(_e, value) => handleSeek(value)}
+                  aria-label="Seek"
                 />
                 <div className={classes.progressText}>
                   <span>{formatTime(localPosition)}</span>
@@ -788,6 +957,32 @@ const ListenTogetherPlayer = () => {
                   </span>
                 </Tooltip>
               </div>
+
+              {/* Volume — local to each listener, persisted across sessions. */}
+              <Box
+                display="flex"
+                alignItems="center"
+                style={{ maxWidth: 220, margin: '0 auto', gap: 8 }}
+              >
+                <IconButton
+                  size="small"
+                  onClick={() => setVolume((v) => (v > 0 ? 0 : 1))}
+                >
+                  {volume > 0 ? (
+                    <VolumeUpIcon fontSize="small" />
+                  ) : (
+                    <VolumeOffIcon fontSize="small" />
+                  )}
+                </IconButton>
+                <Slider
+                  value={volume}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  onChange={(_e, value) => setVolume(value)}
+                  aria-label="Volume"
+                />
+              </Box>
 
               {!isRemoteHolder && (
                 <Button
@@ -875,49 +1070,66 @@ const ListenTogetherPlayer = () => {
 
               <Divider style={{ margin: '8px 0' }} />
 
+              {isRemoteHolder && queue.length > 1 && (
+                <Typography variant="caption" color="textSecondary">
+                  Drag tracks to reorder
+                </Typography>
+              )}
+
               {/* Queue List */}
               <List dense>
                 {queue.map((track, index) => (
-                  <ListItem
+                  <DraggableQueueItem
                     key={`${track.id}-${index}`}
-                    className={`${classes.queueItem} ${index === currentTrackIndex ? 'active' : ''}`}
+                    index={index}
+                    canDrag={isRemoteHolder && index !== currentTrackIndex}
+                    onDropItem={handleReorder}
                   >
-                    <ListItemIcon>
-                      {index === currentTrackIndex ? (
-                        <PlayIcon color="primary" fontSize="small" />
-                      ) : (
-                        <Typography
-                          variant="body2"
-                          color="textSecondary"
-                          style={{ width: 24, textAlign: 'center' }}
-                        >
-                          {index + 1}
-                        </Typography>
+                    <ListItem
+                      className={`${classes.queueItem} ${index === currentTrackIndex ? 'active' : ''}`}
+                    >
+                      <ListItemIcon>
+                        {index === currentTrackIndex ? (
+                          <PlayIcon color="primary" fontSize="small" />
+                        ) : isRemoteHolder ? (
+                          <DragIcon
+                            fontSize="small"
+                            style={{ color: '#999', cursor: 'grab' }}
+                          />
+                        ) : (
+                          <Typography
+                            variant="body2"
+                            color="textSecondary"
+                            style={{ width: 24, textAlign: 'center' }}
+                          >
+                            {index + 1}
+                          </Typography>
+                        )}
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={track.title}
+                        secondary={track.artist}
+                        primaryTypographyProps={{
+                          noWrap: true,
+                          style: {
+                            fontWeight:
+                              index === currentTrackIndex ? 'bold' : 'normal',
+                          },
+                        }}
+                      />
+                      {isRemoteHolder && index !== currentTrackIndex && (
+                        <ListItemSecondaryAction>
+                          <IconButton
+                            edge="end"
+                            size="small"
+                            onClick={() => handleRemoveFromQueue(index)}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </ListItemSecondaryAction>
                       )}
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={track.title}
-                      secondary={track.artist}
-                      primaryTypographyProps={{
-                        noWrap: true,
-                        style: {
-                          fontWeight:
-                            index === currentTrackIndex ? 'bold' : 'normal',
-                        },
-                      }}
-                    />
-                    {isRemoteHolder && index !== currentTrackIndex && (
-                      <ListItemSecondaryAction>
-                        <IconButton
-                          edge="end"
-                          size="small"
-                          onClick={() => handleRemoveFromQueue(index)}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </ListItemSecondaryAction>
-                    )}
-                  </ListItem>
+                    </ListItem>
+                  </DraggableQueueItem>
                 ))}
                 {queue.length === 0 && (
                   <ListItem>
@@ -1001,6 +1213,7 @@ const ListenTogetherPlayer = () => {
         </Grid>
       </Container>
     </div>
+    </DndProvider>
   )
 }
 
