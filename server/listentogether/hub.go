@@ -48,13 +48,31 @@ type TrackInfo struct {
 
 // Participant represents a connected WebSocket client.
 type Participant struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	IsHost   bool   `json:"isHost"`
-	JoinedAt time.Time
-	conn     *websocket.Conn
-	sendCh   chan []byte
-	session  *LiveSession
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsHost    bool   `json:"isHost"`
+	JoinedAt  time.Time
+	position  float64 // Last self-reported playback position (seconds)
+	following bool    // Whether this participant is following the live/group position
+	conn      *websocket.Conn
+	sendCh    chan []byte
+	session   *LiveSession
+}
+
+// ParticipantPosition is one participant's spot on the track, for the timeline view.
+type ParticipantPosition struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Position  float64 `json:"position"`
+	Following bool    `json:"following"`
+	IsHost    bool    `json:"isHost"`
+}
+
+// PositionsPayload broadcasts everyone's position plus the authoritative live point.
+type PositionsPayload struct {
+	Live       float64               `json:"live"`
+	ServerTime int64                 `json:"serverTime"`
+	Positions  []ParticipantPosition `json:"positions"`
 }
 
 // StatePayload is broadcast to all participants after state changes.
@@ -99,6 +117,9 @@ const (
 	maxChatHistory = 50
 	maxChatLen     = 500
 	maxEmojiLen    = 16
+	// Minimum interval between aggregated position broadcasts, so per-client
+	// reports don't fan out into N² traffic.
+	positionsThrottle = 1 * time.Second
 )
 
 // LiveSession holds the runtime state of an active listening session.
@@ -123,7 +144,9 @@ type LiveSession struct {
 	graceTimer   *time.Timer
 	advanceTimer *time.Timer   // Fires when the current track is expected to end
 	chatHistory  []ChatMessage // Recent chat lines (capped at maxChatHistory)
-	hub          *Hub
+
+	lastPositionsBroadcast time.Time // Throttles aggregated position broadcasts
+	hub                    *Hub
 }
 
 // Hub manages all active listening sessions.
@@ -238,13 +261,14 @@ func (ls *LiveSession) Join(conn *websocket.Conn, name string, isHost bool, clie
 	}
 
 	p := &Participant{
-		ID:       id,
-		Name:     name,
-		IsHost:   isHost,
-		JoinedAt: joinedAt,
-		conn:     conn,
-		sendCh:   make(chan []byte, sendChannelSize),
-		session:  ls,
+		ID:        id,
+		Name:      name,
+		IsHost:    isHost,
+		JoinedAt:  joinedAt,
+		following: true,
+		conn:      conn,
+		sendCh:    make(chan []byte, sendChannelSize),
+		session:   ls,
 	}
 
 	ls.participants[p.ID] = p
@@ -414,6 +438,10 @@ func (ls *LiveSession) HandleMessage(sender *Participant, msg WSMessage) {
 		ls.handleTrackEnded(sender)
 	case "sync":
 		ls.handleSync(sender, msg.Payload)
+	case "report_position":
+		ls.handleReportPosition(sender, msg.Payload)
+	case "sync_all":
+		ls.handleSyncAll(sender)
 	case "pass_remote":
 		ls.handlePassRemote(sender, msg.Payload)
 	case "request_remote":
@@ -569,8 +597,71 @@ func (ls *LiveSession) handleSync(sender *Participant, payload json.RawMessage) 
 		ls.currentIndex = data.TrackIndex
 	}
 	ls.scheduleAdvanceLocked()
+	// The holder is, by definition, at the live position and following.
+	sender.position = data.Position
+	sender.following = true
 	ls.mu.Unlock()
 	ls.broadcastStateExcept("tick", sender.ID)
+	ls.maybeBroadcastPositions()
+}
+
+// handleReportPosition records a non-holder's current playback position and
+// whether it is still following the live point, for the timeline view.
+func (ls *LiveSession) handleReportPosition(sender *Participant, payload json.RawMessage) {
+	var data struct {
+		Position  float64 `json:"position"`
+		Following bool    `json:"following"`
+	}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return
+	}
+	ls.mu.Lock()
+	sender.position = data.Position
+	sender.following = data.Following
+	ls.mu.Unlock()
+	ls.maybeBroadcastPositions()
+}
+
+// handleSyncAll lets the remote holder pull everyone's *position* to the current
+// live point. It deliberately does not touch anyone's play/pause state or change
+// who is following — it's a one-shot "gather everyone here". Clients re-sync
+// play/pause only via their own "return to live".
+func (ls *LiveSession) handleSyncAll(sender *Participant) {
+	if !ls.isRemoteHolder(sender) {
+		ls.sendError(sender, "only the remote holder can move everyone")
+		return
+	}
+	ls.broadcastState("sync_all")
+}
+
+// maybeBroadcastPositions emits the aggregated positions to everyone, throttled
+// to positionsThrottle regardless of how many clients are reporting.
+func (ls *LiveSession) maybeBroadcastPositions() {
+	ls.mu.Lock()
+	if time.Since(ls.lastPositionsBroadcast) < positionsThrottle {
+		ls.mu.Unlock()
+		return
+	}
+	ls.lastPositionsBroadcast = time.Now()
+	live := ls.effectivePositionLocked()
+	positions := make([]ParticipantPosition, 0, len(ls.participants))
+	for _, p := range ls.participants {
+		positions = append(positions, ParticipantPosition{
+			ID:        p.ID,
+			Name:      p.Name,
+			Position:  p.position,
+			Following: p.following,
+			IsHost:    p.IsHost,
+		})
+	}
+	ls.mu.Unlock()
+
+	payload, _ := json.Marshal(PositionsPayload{
+		Live:       live,
+		ServerTime: time.Now().UnixMilli(),
+		Positions:  positions,
+	})
+	ls.broadcast(WSMessage{Type: "positions", Payload: payload})
 }
 
 func (ls *LiveSession) handlePassRemote(sender *Participant, payload json.RawMessage) {

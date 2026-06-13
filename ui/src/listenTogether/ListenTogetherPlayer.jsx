@@ -229,6 +229,30 @@ const useStyles = makeStyles((theme) => ({
     alignItems: 'center',
     gap: theme.spacing(1),
   },
+  markerTrack: {
+    position: 'absolute',
+    top: -2,
+    left: 0,
+    right: 0,
+    height: 0,
+    pointerEvents: 'none',
+  },
+  posMarker: {
+    position: 'absolute',
+    transform: 'translateX(-50%)',
+    width: 18,
+    height: 18,
+    borderRadius: '50%',
+    color: '#fff',
+    fontSize: '0.6rem',
+    fontWeight: 'bold',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: '2px solid #fff',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+    pointerEvents: 'auto',
+  },
 }))
 
 const REACTION_EMOJIS = ['❤️', '🔥', '😂', '🎉', '👍', '😮']
@@ -272,6 +296,10 @@ const ListenTogetherPlayer = () => {
   // Mirror of derived state for use inside stable event/WS callbacks.
   const isRemoteHolderRef = useRef(false)
   const isPlayingRef = useRef(false)
+  const followingRef = useRef(true)
+  const effectivePlayingRef = useRef(false)
+  // Latest known live (group) point, for "return to live".
+  const liveRef = useRef({ position: 0, serverTime: 0, isPlaying: false })
 
   // A stable per-browser identity so reconnects keep remote-holder status.
   const clientIdRef = useRef(null)
@@ -328,6 +356,13 @@ const ListenTogetherPlayer = () => {
   // True while this (non-holder) client is actively nudging playbackRate to
   // close a small drift gap.
   const [correcting, setCorrecting] = useState(false)
+  // Whether this client is following the live/group position+playback. Becomes
+  // false when the user scrubs or toggles play/pause locally.
+  const [following, setFollowing] = useState(true)
+  // Local play/pause state used while NOT following (independent playback).
+  const [localPlaying, setLocalPlaying] = useState(false)
+  // Everyone's spot on the track, for the timeline markers.
+  const [participantPositions, setParticipantPositions] = useState([])
 
   // Chat + reactions
   const [chatMessages, setChatMessages] = useState([])
@@ -341,25 +376,55 @@ const ListenTogetherPlayer = () => {
 
   const sessionId = listenTogetherInfo?.id
 
+  // The holder always reflects the group; non-holders reflect group only while
+  // following, otherwise their own local play state.
+  const detached = !isRemoteHolder && !following
+  const effectivePlaying = detached ? localPlaying : isPlaying
+
+  // serverNow() estimates the current server wall-clock from our local clock.
+  const serverNow = () => Date.now() + (clockOffsetRef.current || 0)
+  // The live (group) position right now, latency-compensated.
+  const liveNow = () => {
+    const l = liveRef.current
+    let pos = l.position || 0
+    if (l.isPlaying && l.serverTime > 0) {
+      const elapsed = (serverNow() - l.serverTime) / 1000
+      if (elapsed > 0) pos += elapsed
+    }
+    return pos
+  }
+
   // Local sync-health indicator shown in the app bar.
-  const syncStatus = buffering
-    ? { label: 'Buffering', color: '#ed6c02' }
-    : isRemoteHolder
-      ? { label: 'Host', color: '#2e7d32' }
-      : correcting
-        ? { label: 'Syncing', color: '#1976d2' }
-        : { label: 'In sync', color: '#2e7d32' }
+  const syncStatus = detached
+    ? { label: 'Browsing', color: '#6a1b9a' }
+    : buffering
+      ? { label: 'Buffering', color: '#ed6c02' }
+      : isRemoteHolder
+        ? { label: 'Host', color: '#2e7d32' }
+        : correcting
+          ? { label: 'Syncing', color: '#1976d2' }
+          : { label: 'In sync', color: '#2e7d32' }
 
   // Keep a ref in sync so stable callbacks (WS handlers, audio events) can read
   // the current remote-holder status without being re-created.
   useEffect(() => {
     isRemoteHolderRef.current = !!isRemoteHolder
     // The holder is the source of truth and must play at normal speed; clear any
-    // leftover drift-correction nudge from when this client was a listener.
-    if (isRemoteHolder && audioRef.current) {
-      audioRef.current.playbackRate = 1.0
+    // leftover drift-correction nudge from when this client was a listener, and
+    // re-attach to the live state (the holder cannot be "browsing").
+    if (isRemoteHolder) {
+      if (audioRef.current) audioRef.current.playbackRate = 1.0
+      setFollowing(true)
     }
   }, [isRemoteHolder])
+
+  useEffect(() => {
+    followingRef.current = following
+  }, [following])
+
+  useEffect(() => {
+    effectivePlayingRef.current = effectivePlaying
+  }, [effectivePlaying])
 
   // Check if name was previously set
   useEffect(() => {
@@ -381,9 +446,6 @@ const ListenTogetherPlayer = () => {
       clientIdRef.current,
     )
     wsRef.current = ws
-
-    // serverNow() estimates the current server wall-clock from our local clock.
-    const serverNow = () => Date.now() + (clockOffsetRef.current || 0)
 
     // Apply a position update to the local audio element. Explicit actions and
     // large drift hard-seek; small drift (ticks) is corrected by nudging
@@ -453,23 +515,63 @@ const ListenTogetherPlayer = () => {
         if (elapsed > 0) target += elapsed
       }
 
+      // Remember the live point for "return to live".
+      liveRef.current = {
+        position: state.position || 0,
+        serverTime: state.serverTime || 0,
+        isPlaying: playing,
+      }
+
       const trackChanged = newTrackIndex !== prevTrackIndex
       if (trackChanged) {
-        // The source effect will load the new track; defer the seek until the
-        // audio is ready (handled on the 'canplay' event).
+        // A new track is global: everyone loads it and re-attaches to the group
+        // at the start. The source effect loads it; the seek is applied on 'canplay'.
         pendingSeekRef.current = target
         setLocalPosition(target)
+        setFollowing(true)
+        followingRef.current = true
         return
       }
 
       // Queue-only updates (add/remove/reorder) must not disturb playback.
       if (action.startsWith('queue_')) return
 
+      // The host's "move everyone here" overrides position for ALL clients
+      // (including detached ones), but leaves play/pause and following untouched.
+      if (action === 'sync_all') {
+        const audio = audioRef.current
+        if (audio) {
+          try {
+            audio.currentTime = target
+          } catch {
+            /* ignore */
+          }
+          audio.playbackRate = 1.0
+        }
+        setLocalPosition(target)
+        setCorrecting(false)
+        return
+      }
+
+      // Detached clients ignore normal group position updates.
+      if (!isRemoteHolderRef.current && !followingRef.current) return
+
       applyPositionCorrection(target, action, playing)
     }
 
     ws.onParticipants = (data) => {
       setParticipants(data.participants || [])
+    }
+
+    ws.onPositions = (data) => {
+      setParticipantPositions(data.positions || [])
+      if (typeof data.serverTime === 'number' && data.serverTime > 0) {
+        liveRef.current = {
+          position: data.live || 0,
+          serverTime: data.serverTime,
+          isPlaying: liveRef.current.isPlaying,
+        }
+      }
     }
 
     ws.onRemote = (data) => {
@@ -609,7 +711,7 @@ const ListenTogetherPlayer = () => {
         }
         pendingSeekRef.current = null
       }
-      if (isPlayingRef.current) {
+      if (effectivePlayingRef.current) {
         audio.play().catch(() => {})
       }
     }
@@ -618,18 +720,18 @@ const ListenTogetherPlayer = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.id, currentTrack?.token, connected])
 
-  // Toggle play/pause on the already-loaded source when the session's playing
-  // state changes. Track loading + initial play is handled by the effect above.
+  // Toggle play/pause on the already-loaded source. Uses the effective play
+  // state: the group's while following, or this client's own while detached.
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || !connected || !currentTrack) return
-    if (isPlaying) {
+    if (effectivePlaying) {
       audio.play().catch(() => {})
     } else {
       audio.pause()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, connected])
+  }, [effectivePlaying, connected])
 
   // When the holder's track finishes, tell the server so it can advance the
   // queue. This is a fallback for the server's own advance timer (which handles
@@ -647,10 +749,12 @@ const ListenTogetherPlayer = () => {
     return () => audio.removeEventListener('ended', onEnded)
   }, [])
 
-  // Send periodic sync if remote holder. This refreshes the server's
-  // authoritative clock and drives drift correction for the other listeners.
+  // Periodic position report (every client). The holder sends "sync", which
+  // also drives the server's authoritative clock and the drift-correction ticks;
+  // everyone else sends "report_position" with their own spot + follow state.
+  // Both feed the shared timeline view.
   useEffect(() => {
-    if (!isRemoteHolder || !connected) {
+    if (!connected) {
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current)
         syncIntervalRef.current = null
@@ -660,10 +764,16 @@ const ListenTogetherPlayer = () => {
 
     syncIntervalRef.current = setInterval(() => {
       const audio = audioRef.current
-      if (audio && wsRef.current) {
+      if (!audio || !wsRef.current) return
+      if (isRemoteHolderRef.current) {
         wsRef.current.sendCommand('sync', {
           position: audio.currentTime,
           trackIndex: currentTrackIndexRef.current,
+        })
+      } else {
+        wsRef.current.sendCommand('report_position', {
+          position: audio.currentTime,
+          following: followingRef.current,
         })
       }
     }, 2000)
@@ -673,7 +783,7 @@ const ListenTogetherPlayer = () => {
         clearInterval(syncIntervalRef.current)
       }
     }
-  }, [isRemoteHolder, connected])
+  }, [connected])
 
   // Name dialog
   const handleNameSubmit = () => {
@@ -685,19 +795,27 @@ const ListenTogetherPlayer = () => {
     }
   }
 
-  // Playback controls (only for remote holder)
+  // Play/pause. The holder controls the group; anyone else controls their own
+  // local playback and detaches from the live state when they do.
   const handlePlay = useCallback(() => {
-    if (isRemoteHolder && wsRef.current) {
-      wsRef.current.sendCommand('play')
+    if (isRemoteHolder) {
+      if (wsRef.current) wsRef.current.sendCommand('play')
+    } else {
+      setLocalPlaying(true)
+      setFollowing(false)
     }
   }, [isRemoteHolder])
 
   const handlePause = useCallback(() => {
-    if (isRemoteHolder && wsRef.current) {
-      wsRef.current.sendCommand('pause')
+    if (isRemoteHolder) {
+      if (wsRef.current) wsRef.current.sendCommand('pause')
+    } else {
+      setLocalPlaying(false)
+      setFollowing(false)
     }
   }, [isRemoteHolder])
 
+  // Skip navigates the shared queue — holder only.
   const handleSkipNext = useCallback(() => {
     if (isRemoteHolder && wsRef.current) {
       wsRef.current.sendCommand('skip_next')
@@ -710,11 +828,26 @@ const ListenTogetherPlayer = () => {
     }
   }, [isRemoteHolder])
 
+  // Scrubbing. The holder moves the group (sends seek); anyone else moves only
+  // their own playback and detaches.
   const handleSeek = useCallback(
     (newPosition) => {
-      if (!isRemoteHolder || !currentTrack) return
-      if (wsRef.current) {
-        wsRef.current.sendCommand('seek', { position: newPosition })
+      if (!currentTrack) return
+      if (isRemoteHolder) {
+        if (wsRef.current) wsRef.current.sendCommand('seek', { position: newPosition })
+      } else {
+        const audio = audioRef.current
+        if (audio) {
+          try {
+            audio.currentTime = newPosition
+          } catch {
+            /* ignore */
+          }
+          audio.playbackRate = 1.0
+        }
+        setLocalPosition(newPosition)
+        setFollowing(false)
+        setCorrecting(false)
       }
     },
     [isRemoteHolder, currentTrack],
@@ -725,6 +858,33 @@ const ListenTogetherPlayer = () => {
   const handleScrubChange = useCallback((_e, value) => {
     setLocalPosition(value)
   }, [])
+
+  // Re-sync this client fully to the live point: snap to the host's position and
+  // adopt the host's play/pause state.
+  const handleReturnToLive = useCallback(() => {
+    const target = liveNow()
+    const audio = audioRef.current
+    if (audio) {
+      try {
+        audio.currentTime = target
+      } catch {
+        /* ignore */
+      }
+      audio.playbackRate = 1.0
+    }
+    setLocalPosition(target)
+    setLocalPlaying(liveRef.current.isPlaying)
+    setFollowing(true)
+    setCorrecting(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Host action: pull everyone's position to the current live point.
+  const handleSyncEveryone = useCallback(() => {
+    if (isRemoteHolder && wsRef.current) {
+      wsRef.current.sendCommand('sync_all')
+    }
+  }, [isRemoteHolder])
 
   // Search
   const handleSearch = useCallback(async () => {
@@ -1022,8 +1182,9 @@ const ListenTogetherPlayer = () => {
                 </Typography>
               )}
 
-              {/* Progress Bar — draggable scrubber for the remote holder, with a
-                  buffered-amount indicator behind it. */}
+              {/* Progress Bar — draggable scrubber (everyone can scrub their own
+                  playback; the holder moves the group). Buffered amount sits
+                  behind it; participant markers + the live point sit above. */}
               <Box className={classes.progressBar} style={{ position: 'relative' }}>
                 <LinearProgress
                   variant="determinate"
@@ -1041,16 +1202,62 @@ const ListenTogetherPlayer = () => {
                   min={0}
                   max={currentTrack?.duration || 0}
                   step={0.1}
-                  disabled={!isRemoteHolder || !currentTrack}
+                  disabled={!currentTrack}
                   onChange={handleScrubChange}
                   onChangeCommitted={(_e, value) => handleSeek(value)}
                   aria-label="Seek"
                 />
+                {/* Position markers: where each participant is on the track */}
+                {currentTrack?.duration > 0 && (
+                  <div className={classes.markerTrack}>
+                    {participantPositions
+                      .filter((p) => p.id !== myId)
+                      .map((p) => (
+                        <Tooltip
+                          key={p.id}
+                          title={`${p.name}${p.following ? '' : ' (browsing)'} — ${formatTime(p.position)}`}
+                        >
+                          <div
+                            className={classes.posMarker}
+                            style={{
+                              left: `${Math.min((p.position / currentTrack.duration) * 100, 100)}%`,
+                              backgroundColor: p.following ? '#1976d2' : '#6a1b9a',
+                            }}
+                          >
+                            {(p.name || '?').charAt(0).toUpperCase()}
+                          </div>
+                        </Tooltip>
+                      ))}
+                  </div>
+                )}
                 <div className={classes.progressText}>
                   <span>{formatTime(localPosition)}</span>
                   <span>{formatTime(currentTrack?.duration)}</span>
                 </div>
               </Box>
+
+              {/* Detached / sync controls */}
+              {detached && (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="small"
+                  onClick={handleReturnToLive}
+                  style={{ marginBottom: 8 }}
+                >
+                  Return to live
+                </Button>
+              )}
+              {isRemoteHolder && participants.length > 1 && (
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={handleSyncEveryone}
+                  style={{ marginBottom: 8 }}
+                >
+                  Sync everyone to here
+                </Button>
+              )}
 
               {/* Playback Controls */}
               <div className={classes.controls}>
@@ -1071,20 +1278,22 @@ const ListenTogetherPlayer = () => {
                 <Tooltip
                   title={
                     isRemoteHolder
-                      ? isPlaying
+                      ? effectivePlaying
                         ? 'Pause'
                         : 'Play'
-                      : 'Only remote holder can control'
+                      : effectivePlaying
+                        ? 'Pause (just you)'
+                        : 'Play (just you)'
                   }
                 >
                   <span>
                     <IconButton
-                      onClick={isPlaying ? handlePause : handlePlay}
-                      disabled={!isRemoteHolder}
+                      onClick={effectivePlaying ? handlePause : handlePlay}
+                      disabled={!currentTrack}
                       color="primary"
                       size="medium"
                     >
-                      {isPlaying ? (
+                      {effectivePlaying ? (
                         <PauseIcon fontSize="large" />
                       ) : (
                         <PlayIcon fontSize="large" />
