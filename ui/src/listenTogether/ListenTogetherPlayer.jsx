@@ -6,13 +6,11 @@ import {
   Button,
   Chip,
   CircularProgress,
-  Container,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
-  Grid,
   IconButton,
   InputBase,
   LinearProgress,
@@ -93,103 +91,130 @@ const DraggableQueueItem = ({ index, canDrag, onDropItem, children }) => {
 
 const useStyles = makeStyles((theme) => ({
   root: {
-    minHeight: '100vh',
+    height: '100vh',
     backgroundColor: theme.palette.type === 'dark' ? '#121212' : '#f5f5f5',
     display: 'flex',
     flexDirection: 'column',
+    overflow: 'hidden',
   },
   appBar: {
     backgroundColor: theme.palette.primary.main,
   },
   title: {
     flexGrow: 1,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
-  content: {
+  // Main area between the app bar and the bottom player bar. Uses flex-wrap so
+  // it sits side-by-side on wide screens and stacks on narrow ones with no fixed
+  // breakpoints: the area scrolls as a whole when stacked, and each panel scrolls
+  // internally when there's room to sit side-by-side.
+  main: {
     flex: 1,
-    padding: theme.spacing(3),
-    maxWidth: 1200,
-    margin: '0 auto',
-    width: '100%',
-  },
-  nowPlaying: {
-    textAlign: 'center',
-    padding: theme.spacing(3),
-    marginBottom: theme.spacing(2),
-  },
-  albumArt: {
-    width: 200,
-    height: 200,
-    margin: '0 auto',
-    marginBottom: theme.spacing(2),
-    backgroundColor: theme.palette.grey[300],
+    minHeight: 0,
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-  },
-  controls: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexWrap: 'wrap',
+    alignItems: 'stretch',
     gap: theme.spacing(2),
-    marginTop: theme.spacing(2),
-    marginBottom: theme.spacing(1),
-  },
-  progressBar: {
+    padding: theme.spacing(2),
+    overflowY: 'auto',
+    maxWidth: 1400,
     width: '100%',
-    marginTop: theme.spacing(1),
+    margin: '0 auto',
   },
-  progressText: {
+  queuePanel: {
+    flex: '2 1 340px',
+    minWidth: 260,
+    minHeight: 220,
     display: 'flex',
-    justifyContent: 'space-between',
-    fontSize: '0.75rem',
-    color: theme.palette.text.secondary,
-  },
-  panel: {
+    flexDirection: 'column',
     padding: theme.spacing(2),
   },
-  // On desktop the three columns share one fixed-height row so the blocks are
-  // uniform and aligned; each column fills it and scrolls internally. On mobile
-  // they stack with natural heights.
-  mainGrid: {
-    [theme.breakpoints.up('md')]: {
-      height: 'calc(100vh - 112px)',
-      flexWrap: 'nowrap',
-    },
-  },
-  fillCol: {
-    [theme.breakpoints.up('md')]: {
-      height: '100%',
-    },
-  },
-  nowPlayingFill: {
-    [theme.breakpoints.up('md')]: {
-      height: '100%',
-      marginBottom: 0,
-      overflowY: 'auto',
-    },
-  },
-  queueFill: {
-    [theme.breakpoints.up('md')]: {
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      minHeight: 0,
-    },
-  },
   queueScroll: {
-    [theme.breakpoints.up('md')]: {
-      flex: 1,
-      overflowY: 'auto',
-      minHeight: 0,
-    },
+    flex: 1,
+    overflowY: 'auto',
+    minHeight: 0,
   },
-  participantsFill: {
-    [theme.breakpoints.up('md')]: {
-      flexShrink: 0,
-      maxHeight: '45%',
-      overflowY: 'auto',
-    },
+  sidebar: {
+    flex: '1 1 300px',
+    minWidth: 260,
+    minHeight: 220,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(2),
+  },
+  participantsPanel: {
+    padding: theme.spacing(2),
+    flexShrink: 0,
+    maxHeight: '45%',
+    overflowY: 'auto',
+  },
+  // Bottom player bar — full width, naturally compact, wraps on narrow screens.
+  playerBar: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: theme.spacing(2),
+    padding: theme.spacing(1, 2),
+    borderTop: `1px solid ${theme.palette.divider}`,
+    backgroundColor: theme.palette.background.paper,
+  },
+  playerLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1.5),
+    flex: '1 1 200px',
+    minWidth: 0,
+  },
+  playerCenter: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 2,
+    flex: '2 1 340px',
+    minWidth: 240,
+  },
+  playerRight: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: theme.spacing(1),
+    flex: '1 1 200px',
+  },
+  barArt: {
+    width: 52,
+    height: 52,
+    borderRadius: 6,
+    flexShrink: 0,
+    backgroundColor: theme.palette.grey[400],
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  trackMeta: { minWidth: 0, overflow: 'hidden' },
+  controlsRow: { display: 'flex', alignItems: 'center', gap: theme.spacing(1) },
+  scrubRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    width: '100%',
+  },
+  scrubWrap: { position: 'relative', flex: 1 },
+  timeText: {
+    fontSize: '0.7rem',
+    color: theme.palette.text.secondary,
+    minWidth: 36,
+    textAlign: 'center',
+  },
+  volumeBox: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    width: 120,
   },
   queueItem: {
     '&.active': {
@@ -226,40 +251,35 @@ const useStyles = makeStyles((theme) => ({
   },
   reactionBar: {
     display: 'flex',
-    justifyContent: 'center',
-    gap: theme.spacing(1),
-    marginTop: theme.spacing(1),
+    gap: theme.spacing(0.5),
   },
   reactionButton: {
-    fontSize: '1.4rem',
+    fontSize: '1.25rem',
     cursor: 'pointer',
     background: 'none',
     border: 'none',
-    padding: 4,
+    padding: 2,
     borderRadius: 6,
     lineHeight: 1,
     '&:hover': { backgroundColor: theme.palette.action.hover },
   },
   '@keyframes ltFloatUp': {
     '0%': { transform: 'translateY(0) scale(1)', opacity: 1 },
-    '100%': { transform: 'translateY(-140px) scale(1.4)', opacity: 0 },
+    '100%': { transform: 'translateY(-160px) scale(1.5)', opacity: 0 },
   },
   floatingReaction: {
     position: 'absolute',
-    bottom: 24,
-    fontSize: '2rem',
-    animation: '$ltFloatUp 3.5s ease-out forwards',
+    bottom: 56,
+    fontSize: '1.8rem',
+    animation: '$ltFloatUp 3.2s ease-out forwards',
     pointerEvents: 'none',
-    textAlign: 'center',
-    width: 'auto',
   },
   chatPanel: {
     padding: theme.spacing(2),
-    marginTop: theme.spacing(3),
     display: 'flex',
     flexDirection: 'column',
-    flexGrow: 1,
-    minHeight: 300,
+    flex: 1,
+    minHeight: 160,
   },
   chatMessages: {
     flex: 1,
@@ -1193,562 +1213,461 @@ const ListenTogetherPlayer = () => {
         </Toolbar>
       </AppBar>
 
-      {/* Main Content */}
-      <Container className={classes.content}>
-        <Grid container spacing={3} className={classes.mainGrid}>
-          {/* Now Playing + Controls */}
-          <Grid item xs={12} md={4} className={classes.fillCol}>
-            <Paper
-              className={`${classes.nowPlaying} ${classes.nowPlayingFill}`}
-              elevation={2}
-              style={{ position: 'relative' }}
-            >
-              {/* Floating emoji reactions */}
-              {floatingReactions.map((r, i) => (
-                <span
-                  key={r.id}
-                  className={classes.floatingReaction}
-                  style={{ left: `${15 + ((i * 17) % 70)}%` }}
-                  title={r.senderName}
-                >
-                  {r.emoji}
-                </span>
-              ))}
-              <div className={classes.albumArt} style={{ position: 'relative' }}>
-                {currentTrack?.coverArt ? (
-                  <img
-                    src={currentTrack.coverArt}
-                    alt={currentTrack.album || currentTrack.title}
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      objectFit: 'cover',
-                      borderRadius: 8,
-                    }}
-                    onError={(e) => {
-                      e.target.style.display = 'none'
-                    }}
-                  />
-                ) : (
-                  <MusicNoteIcon style={{ fontSize: 80, color: '#999' }} />
-                )}
-                {buffering && isPlaying && (
-                  <Box
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: 'rgba(0,0,0,0.35)',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <CircularProgress style={{ color: '#fff' }} />
-                  </Box>
-                )}
-              </div>
-              {currentTrack ? (
-                <>
-                  <Typography variant="h5" gutterBottom>
-                    {currentTrack.title}
-                  </Typography>
-                  <Typography variant="subtitle1" color="textSecondary">
-                    {currentTrack.artist}
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    {currentTrack.album}
-                  </Typography>
-                </>
-              ) : (
-                <Typography variant="h6" color="textSecondary">
-                  No track playing
-                </Typography>
-              )}
+      {/* Main area: Queue + Sidebar (Participants + Chat). Fills the space
+          between the app bar and the bottom player bar, reflowing responsively. */}
+      <div className={classes.main}>
+        {/* Queue */}
+        <Paper className={classes.queuePanel} elevation={2}>
+          <Typography variant="h6" gutterBottom>
+            Queue
+          </Typography>
 
-              {/* Progress Bar — draggable scrubber (everyone can scrub their own
-                  playback; the holder moves the group). Buffered amount sits
-                  behind it; participant markers + the live point sit above. */}
-              <Box className={classes.progressBar} style={{ position: 'relative' }}>
-                <LinearProgress
-                  variant="determinate"
-                  value={Math.min(bufferedFraction * 100, 100)}
-                  style={{
-                    position: 'absolute',
-                    top: 12,
-                    left: 0,
-                    right: 0,
-                    opacity: 0.3,
-                  }}
+          {/* Search (remote holder only) */}
+          {isRemoteHolder && (
+            <>
+              <Paper className={classes.searchBar} variant="outlined">
+                <InputBase
+                  className={classes.searchInput}
+                  placeholder="Search library..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
                 />
-                <Slider
-                  value={Math.min(localPosition, currentTrack?.duration || 0)}
-                  min={0}
-                  max={currentTrack?.duration || 0}
-                  step={0.1}
-                  disabled={!currentTrack}
-                  onChange={handleScrubChange}
-                  onChangeCommitted={(_e, value) => handleSeek(value)}
-                  aria-label="Seek"
-                />
-                {/* Position markers: where each participant is on the track */}
-                {currentTrack?.duration > 0 && (
-                  <div className={classes.markerTrack}>
-                    {participantPositions
-                      .filter((p) => p.id !== myId)
-                      .map((p) => (
-                        <Tooltip
-                          key={p.id}
-                          title={`${p.name}${p.following ? '' : ' (browsing)'} — ${formatTime(p.position)}`}
-                        >
-                          <div
-                            className={classes.posMarker}
-                            style={{
-                              left: `${Math.min((p.position / currentTrack.duration) * 100, 100)}%`,
-                              backgroundColor: p.following ? '#1976d2' : '#6a1b9a',
-                            }}
-                          >
-                            {(p.name || '?').charAt(0).toUpperCase()}
-                          </div>
-                        </Tooltip>
-                      ))}
-                  </div>
-                )}
-                <div className={classes.progressText}>
-                  <span>{formatTime(localPosition)}</span>
-                  <span>{formatTime(currentTrack?.duration)}</span>
-                </div>
-              </Box>
-
-              {/* Detached / sync controls */}
-              {detached && (
-                <Button
-                  variant="contained"
-                  color="primary"
-                  size="small"
-                  onClick={handleReturnToLive}
-                  style={{ marginBottom: 8 }}
-                >
-                  Return to live
-                </Button>
-              )}
-              {isRemoteHolder && participants.length > 1 && (
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={handleSyncEveryone}
-                  style={{ marginBottom: 8 }}
-                >
-                  Sync everyone to here
-                </Button>
-              )}
-
-              {/* Playback Controls */}
-              <div className={classes.controls}>
-                <Tooltip
-                  title={
-                    isRemoteHolder ? 'Previous' : 'Only remote holder can control'
-                  }
-                >
-                  <span>
-                    <IconButton
-                      onClick={handleSkipPrev}
-                      disabled={!isRemoteHolder}
-                    >
-                      <SkipPrevIcon />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Tooltip
-                  title={
-                    isRemoteHolder
-                      ? effectivePlaying
-                        ? 'Pause'
-                        : 'Play'
-                      : effectivePlaying
-                        ? 'Pause (just you)'
-                        : 'Play (just you)'
-                  }
-                >
-                  <span>
-                    <IconButton
-                      onClick={effectivePlaying ? handlePause : handlePlay}
-                      disabled={!currentTrack}
-                      color="primary"
-                      size="medium"
-                    >
-                      {effectivePlaying ? (
-                        <PauseIcon fontSize="large" />
-                      ) : (
-                        <PlayIcon fontSize="large" />
-                      )}
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Tooltip
-                  title={
-                    isRemoteHolder ? 'Next' : 'Only remote holder can control'
-                  }
-                >
-                  <span>
-                    <IconButton
-                      onClick={handleSkipNext}
-                      disabled={!isRemoteHolder}
-                    >
-                      <SkipNextIcon />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              </div>
-
-              {/* Volume — local to each listener, persisted across sessions. */}
-              <Box
-                display="flex"
-                alignItems="center"
-                style={{ maxWidth: 220, margin: '0 auto', gap: 8 }}
-              >
-                <IconButton
-                  size="small"
-                  onClick={() => setVolume((v) => (v > 0 ? 0 : 1))}
-                >
-                  {volume > 0 ? (
-                    <VolumeUpIcon fontSize="small" />
-                  ) : (
-                    <VolumeOffIcon fontSize="small" />
-                  )}
+                <IconButton onClick={handleSearch} size="small">
+                  <SearchIcon />
                 </IconButton>
-                <Slider
-                  value={volume}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  onChange={(_e, value) => setVolume(value)}
-                  aria-label="Volume"
-                />
-              </Box>
-
-              {!isRemoteHolder && (
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={handleRequestRemote}
-                  startIcon={<SwapIcon />}
-                  style={{ marginTop: 8 }}
-                >
-                  Request Remote
-                </Button>
+              </Paper>
+              {searching && (
+                <Box display="flex" justifyContent="center" p={1}>
+                  <CircularProgress size={24} />
+                </Box>
               )}
-              {isRemoteHolder && (
-                <Typography
-                  variant="caption"
-                  color="primary"
-                  style={{ marginTop: 8, display: 'block' }}
-                >
-                  You have the remote
-                </Typography>
-              )}
-
-              {/* Reaction bar — anyone can react */}
-              <div className={classes.reactionBar}>
-                {REACTION_EMOJIS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    className={classes.reactionButton}
-                    onClick={() => handleSendReaction(emoji)}
-                    aria-label={`React ${emoji}`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-            </Paper>
-          </Grid>
-
-          {/* Queue Panel */}
-          <Grid item xs={12} md={4} className={classes.fillCol}>
-            <Paper
-              className={`${classes.panel} ${classes.queueFill}`}
-              elevation={2}
-            >
-              <Typography variant="h6" gutterBottom>
-                Queue
-              </Typography>
-
-              {/* Search bar (only for remote holder) */}
-              {isRemoteHolder && (
-                <>
-                  <Paper className={classes.searchBar} variant="outlined">
-                    <InputBase
-                      className={classes.searchInput}
-                      placeholder="Search library..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                    />
-                    <IconButton onClick={handleSearch} size="small">
-                      <SearchIcon />
-                    </IconButton>
-                  </Paper>
-
-                  {/* Search Results */}
-                  {searching && (
-                    <Box display="flex" justifyContent="center" p={1}>
-                      <CircularProgress size={24} />
-                    </Box>
-                  )}
-                  {searchResults.length > 0 && (
-                    <Paper
-                      className={classes.searchResults}
-                      variant="outlined"
-                    >
-                      <List dense>
-                        {searchResults.map((result) => (
-                          <ListItem key={result.id}>
-                            <ListItemIcon>
-                              <MusicNoteIcon fontSize="small" />
-                            </ListItemIcon>
-                            <ListItemText
-                              primary={result.title}
-                              secondary={`${result.artist} - ${result.album}`}
-                            />
-                            <ListItemSecondaryAction>
-                              <Tooltip title="Add to queue">
-                                <IconButton
-                                  edge="end"
-                                  size="small"
-                                  onClick={() => handleAddToQueue(result.id)}
-                                >
-                                  <AddIcon />
-                                </IconButton>
-                              </Tooltip>
-                              <Tooltip title="Add similar tracks (instant mix)">
-                                <IconButton
-                                  edge="end"
-                                  size="small"
-                                  onClick={() => handleAddSimilar(result.id)}
-                                >
-                                  <QueueMusicIcon />
-                                </IconButton>
-                              </Tooltip>
-                            </ListItemSecondaryAction>
-                          </ListItem>
-                        ))}
-                      </List>
-                    </Paper>
-                  )}
-                </>
-              )}
-
-              <Divider style={{ margin: '8px 0' }} />
-
-              {isRemoteHolder && queue.length > 1 && (
-                <Typography variant="caption" color="textSecondary">
-                  Drag tracks to reorder
-                </Typography>
-              )}
-
-              {/* Queue List (scrolls within the column) */}
-              <div className={classes.queueScroll}>
-              <List dense>
-                {queue.map((track, index) => (
-                  <DraggableQueueItem
-                    key={`${track.id}-${index}`}
-                    index={index}
-                    canDrag={isRemoteHolder && index !== currentTrackIndex}
-                    onDropItem={handleReorder}
-                  >
-                    <ListItem
-                      className={`${classes.queueItem} ${index === currentTrackIndex ? 'active' : ''}`}
-                    >
-                      <ListItemIcon>
-                        {index === currentTrackIndex ? (
-                          <PlayIcon color="primary" fontSize="small" />
-                        ) : isRemoteHolder ? (
-                          <DragIcon
-                            fontSize="small"
-                            style={{ color: '#999', cursor: 'grab' }}
-                          />
-                        ) : (
-                          <Typography
-                            variant="body2"
-                            color="textSecondary"
-                            style={{ width: 24, textAlign: 'center' }}
-                          >
-                            {index + 1}
-                          </Typography>
-                        )}
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={track.title}
-                        secondary={track.artist}
-                        primaryTypographyProps={{
-                          noWrap: true,
-                          style: {
-                            fontWeight:
-                              index === currentTrackIndex ? 'bold' : 'normal',
-                          },
-                        }}
-                      />
-                      {isRemoteHolder && index !== currentTrackIndex && (
+              {searchResults.length > 0 && (
+                <Paper className={classes.searchResults} variant="outlined">
+                  <List dense>
+                    {searchResults.map((result) => (
+                      <ListItem key={result.id}>
+                        <ListItemIcon>
+                          <MusicNoteIcon fontSize="small" />
+                        </ListItemIcon>
+                        <ListItemText
+                          primary={result.title}
+                          secondary={`${result.artist} - ${result.album}`}
+                        />
                         <ListItemSecondaryAction>
-                          <IconButton
-                            edge="end"
-                            size="small"
-                            onClick={() => handleRemoveFromQueue(index)}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </ListItemSecondaryAction>
-                      )}
-                    </ListItem>
-                  </DraggableQueueItem>
-                ))}
-                {queue.length === 0 && (
-                  <ListItem>
-                    <ListItemText
-                      primary="Queue is empty"
-                      primaryTypographyProps={{ color: 'textSecondary' }}
-                    />
-                  </ListItem>
-                )}
-              </List>
-              </div>
-            </Paper>
-          </Grid>
-
-          {/* Participants + Chat (right column, chat fills remaining height) */}
-          <Grid
-            item
-            xs={12}
-            md={4}
-            className={classes.fillCol}
-            style={{ display: 'flex', flexDirection: 'column' }}
-          >
-            <Paper
-              className={`${classes.panel} ${classes.participantsFill}`}
-              elevation={2}
-            >
-              <Typography variant="h6" gutterBottom>
-                Participants
-              </Typography>
-              <List dense>
-                {participants.map((p) => (
-                  <ListItem key={p.id} className={classes.participantItem}>
-                    <ListItemAvatar>
-                      <Avatar>
-                        {p.isHost ? (
-                          <StarIcon />
-                        ) : (
-                          <PersonIcon />
-                        )}
-                      </Avatar>
-                    </ListItemAvatar>
-                    <ListItemText
-                      primary={
-                        <span>
-                          {p.name}
-                          {p.id === myId && ' (you)'}
-                          {remoteHolder.holderId === p.id && (
-                            <Chip
-                              label="Remote"
+                          <Tooltip title="Add to queue">
+                            <IconButton
+                              edge="end"
                               size="small"
-                              color="primary"
-                              className={classes.remoteChip}
-                            />
-                          )}
-                        </span>
-                      }
+                              onClick={() => handleAddToQueue(result.id)}
+                            >
+                              <AddIcon />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Add similar tracks (instant mix)">
+                            <IconButton
+                              edge="end"
+                              size="small"
+                              onClick={() => handleAddSimilar(result.id)}
+                            >
+                              <QueueMusicIcon />
+                            </IconButton>
+                          </Tooltip>
+                        </ListItemSecondaryAction>
+                      </ListItem>
+                    ))}
+                  </List>
+                </Paper>
+              )}
+            </>
+          )}
+
+          <Divider style={{ margin: '8px 0' }} />
+
+          {isRemoteHolder && queue.length > 1 && (
+            <Typography variant="caption" color="textSecondary">
+              Drag tracks to reorder
+            </Typography>
+          )}
+
+          {/* Queue List (scrolls within the panel) */}
+          <div className={classes.queueScroll}>
+            <List dense>
+              {queue.map((track, index) => (
+                <DraggableQueueItem
+                  key={`${track.id}-${index}`}
+                  index={index}
+                  canDrag={isRemoteHolder && index !== currentTrackIndex}
+                  onDropItem={handleReorder}
+                >
+                  <ListItem
+                    className={`${classes.queueItem} ${index === currentTrackIndex ? 'active' : ''}`}
+                  >
+                    <ListItemIcon>
+                      {index === currentTrackIndex ? (
+                        <PlayIcon color="primary" fontSize="small" />
+                      ) : isRemoteHolder ? (
+                        <DragIcon
+                          fontSize="small"
+                          style={{ color: '#999', cursor: 'grab' }}
+                        />
+                      ) : (
+                        <Typography
+                          variant="body2"
+                          color="textSecondary"
+                          style={{ width: 24, textAlign: 'center' }}
+                        >
+                          {index + 1}
+                        </Typography>
+                      )}
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={track.title}
+                      secondary={track.artist}
+                      primaryTypographyProps={{
+                        noWrap: true,
+                        style: {
+                          fontWeight:
+                            index === currentTrackIndex ? 'bold' : 'normal',
+                        },
+                      }}
                     />
-                    {isRemoteHolder && p.id !== myId && (
+                    {isRemoteHolder && index !== currentTrackIndex && (
                       <ListItemSecondaryAction>
-                        <Tooltip title="Pass remote">
-                          <IconButton
-                            edge="end"
-                            size="small"
-                            onClick={() => handlePassRemote(p.id)}
-                          >
-                            <SwapIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
+                        <IconButton
+                          edge="end"
+                          size="small"
+                          onClick={() => handleRemoveFromQueue(index)}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
                       </ListItemSecondaryAction>
                     )}
                   </ListItem>
-                ))}
-              </List>
-
-              {isRemoteHolder && (
-                <>
-                  <Divider style={{ margin: '16px 0' }} />
-                  <Button
-                    variant="outlined"
-                    color="secondary"
-                    fullWidth
-                    onClick={handleEndSession}
-                  >
-                    End Session
-                  </Button>
-                </>
+                </DraggableQueueItem>
+              ))}
+              {queue.length === 0 && (
+                <ListItem>
+                  <ListItemText
+                    primary="Queue is empty"
+                    primaryTypographyProps={{ color: 'textSecondary' }}
+                  />
+                </ListItem>
               )}
-            </Paper>
+            </List>
+          </div>
+        </Paper>
 
-            {/* Chat Panel */}
-            <Paper className={classes.chatPanel} elevation={2}>
-              <Typography variant="h6" gutterBottom>
-                Chat
-              </Typography>
-              <div className={classes.chatMessages}>
-                {chatMessages.length === 0 && (
-                  <Typography variant="body2" color="textSecondary">
-                    No messages yet. Say hi!
-                  </Typography>
-                )}
-                {chatMessages.map((m) => (
-                  <div key={m.id} className={classes.chatLine}>
-                    <strong
-                      style={{
-                        color: m.senderId === myId ? '#1976d2' : undefined,
-                      }}
-                    >
-                      {m.senderName}
-                      {m.senderId === myId && ' (you)'}:
-                    </strong>{' '}
-                    <span>{m.text}</span>
-                  </div>
-                ))}
-                <div ref={chatEndRef} />
-              </div>
-              <div className={classes.chatInputRow}>
-                <InputBase
-                  fullWidth
-                  placeholder="Type a message..."
-                  value={chatInput}
-                  inputProps={{ maxLength: 500 }}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleSendChat()}
-                  style={{
-                    border: '1px solid rgba(0,0,0,0.23)',
-                    borderRadius: 4,
-                    padding: '2px 8px',
-                  }}
-                />
-                <Button
-                  color="primary"
-                  variant="contained"
-                  size="small"
-                  onClick={handleSendChat}
-                  disabled={!chatInput.trim()}
-                >
-                  Send
-                </Button>
-              </div>
-            </Paper>
-          </Grid>
-        </Grid>
-      </Container>
+        {/* Sidebar: Participants + Chat */}
+        <div className={classes.sidebar}>
+          <Paper className={classes.participantsPanel} elevation={2}>
+            <Typography variant="h6" gutterBottom>
+              Participants
+            </Typography>
+            <List dense>
+              {participants.map((p) => (
+                <ListItem key={p.id} className={classes.participantItem}>
+                  <ListItemAvatar>
+                    <Avatar>{p.isHost ? <StarIcon /> : <PersonIcon />}</Avatar>
+                  </ListItemAvatar>
+                  <ListItemText
+                    primary={
+                      <span>
+                        {p.name}
+                        {p.id === myId && ' (you)'}
+                        {remoteHolder.holderId === p.id && (
+                          <Chip
+                            label="Remote"
+                            size="small"
+                            color="primary"
+                            className={classes.remoteChip}
+                          />
+                        )}
+                      </span>
+                    }
+                  />
+                  {isRemoteHolder && p.id !== myId && (
+                    <ListItemSecondaryAction>
+                      <Tooltip title="Pass remote">
+                        <IconButton
+                          edge="end"
+                          size="small"
+                          onClick={() => handlePassRemote(p.id)}
+                        >
+                          <SwapIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </ListItemSecondaryAction>
+                  )}
+                </ListItem>
+              ))}
+            </List>
+
+            {!isRemoteHolder && (
+              <Button
+                variant="outlined"
+                size="small"
+                fullWidth
+                startIcon={<SwapIcon />}
+                onClick={handleRequestRemote}
+              >
+                Request Remote
+              </Button>
+            )}
+            {isRemoteHolder && (
+              <Button
+                variant="outlined"
+                color="secondary"
+                size="small"
+                fullWidth
+                onClick={handleEndSession}
+                style={{ marginTop: 8 }}
+              >
+                End Session
+              </Button>
+            )}
+          </Paper>
+
+          {/* Chat */}
+          <Paper className={classes.chatPanel} elevation={2}>
+            <Typography variant="h6" gutterBottom>
+              Chat
+            </Typography>
+            <div className={classes.chatMessages}>
+              {chatMessages.length === 0 && (
+                <Typography variant="body2" color="textSecondary">
+                  No messages yet. Say hi!
+                </Typography>
+              )}
+              {chatMessages.map((m) => (
+                <div key={m.id} className={classes.chatLine}>
+                  <strong
+                    style={{ color: m.senderId === myId ? '#1976d2' : undefined }}
+                  >
+                    {m.senderName}
+                    {m.senderId === myId && ' (you)'}:
+                  </strong>{' '}
+                  <span>{m.text}</span>
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+            <div className={classes.chatInputRow}>
+              <InputBase
+                fullWidth
+                placeholder="Type a message..."
+                value={chatInput}
+                inputProps={{ maxLength: 500 }}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSendChat()}
+                style={{
+                  border: '1px solid rgba(0,0,0,0.23)',
+                  borderRadius: 4,
+                  padding: '2px 8px',
+                }}
+              />
+              <Button
+                color="primary"
+                variant="contained"
+                size="small"
+                onClick={handleSendChat}
+                disabled={!chatInput.trim()}
+              >
+                Send
+              </Button>
+            </div>
+          </Paper>
+        </div>
+      </div>
+
+      {/* Bottom player bar — full width, the now-playing + transport controls. */}
+      <Paper className={classes.playerBar} square elevation={8}>
+        {/* Floating emoji reactions rise from the bar */}
+        {floatingReactions.map((r, i) => (
+          <span
+            key={r.id}
+            className={classes.floatingReaction}
+            style={{ left: `${30 + ((i * 13) % 40)}%` }}
+            title={r.senderName}
+          >
+            {r.emoji}
+          </span>
+        ))}
+
+        {/* Left: cover + track meta */}
+        <div className={classes.playerLeft}>
+          <div className={classes.barArt}>
+            {currentTrack?.coverArt ? (
+              <img
+                src={currentTrack.coverArt}
+                alt=""
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                onError={(e) => {
+                  e.target.style.display = 'none'
+                }}
+              />
+            ) : (
+              <MusicNoteIcon style={{ color: '#fff' }} />
+            )}
+            {buffering && effectivePlaying && (
+              <Box
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: 'rgba(0,0,0,0.4)',
+                }}
+              >
+                <CircularProgress size={20} style={{ color: '#fff' }} />
+              </Box>
+            )}
+          </div>
+          <div className={classes.trackMeta}>
+            <Typography variant="subtitle2" noWrap>
+              {currentTrack?.title || 'No track playing'}
+            </Typography>
+            <Typography variant="caption" color="textSecondary" noWrap display="block">
+              {currentTrack?.artist || ''}
+            </Typography>
+            {detached && (
+              <Button
+                size="small"
+                color="primary"
+                onClick={handleReturnToLive}
+                style={{ padding: '0 4px', minWidth: 0 }}
+              >
+                Return to live
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Center: transport + scrubber with participant markers */}
+        <div className={classes.playerCenter}>
+          <div className={classes.controlsRow}>
+            <Tooltip
+              title={isRemoteHolder ? 'Previous' : 'Only remote holder can change track'}
+            >
+              <span>
+                <IconButton size="small" onClick={handleSkipPrev} disabled={!isRemoteHolder}>
+                  <SkipPrevIcon />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <IconButton
+              color="primary"
+              onClick={effectivePlaying ? handlePause : handlePlay}
+              disabled={!currentTrack}
+            >
+              {effectivePlaying ? (
+                <PauseIcon fontSize="large" />
+              ) : (
+                <PlayIcon fontSize="large" />
+              )}
+            </IconButton>
+            <Tooltip
+              title={isRemoteHolder ? 'Next' : 'Only remote holder can change track'}
+            >
+              <span>
+                <IconButton size="small" onClick={handleSkipNext} disabled={!isRemoteHolder}>
+                  <SkipNextIcon />
+                </IconButton>
+              </span>
+            </Tooltip>
+            {isRemoteHolder && participants.length > 1 && (
+              <Tooltip title="Pull everyone to your position">
+                <span>
+                  <IconButton size="small" onClick={handleSyncEveryone}>
+                    <SyncIcon />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+          </div>
+          <div className={classes.scrubRow}>
+            <span className={classes.timeText}>{formatTime(localPosition)}</span>
+            <div className={classes.scrubWrap}>
+              <LinearProgress
+                variant="determinate"
+                value={Math.min(bufferedFraction * 100, 100)}
+                style={{ position: 'absolute', top: 13, left: 0, right: 0, opacity: 0.3 }}
+              />
+              <Slider
+                value={Math.min(localPosition, currentTrack?.duration || 0)}
+                min={0}
+                max={currentTrack?.duration || 0}
+                step={0.1}
+                disabled={!currentTrack}
+                onChange={handleScrubChange}
+                onChangeCommitted={(_e, value) => handleSeek(value)}
+                aria-label="Seek"
+              />
+              {currentTrack?.duration > 0 && (
+                <div className={classes.markerTrack}>
+                  {participantPositions
+                    .filter((p) => p.id !== myId)
+                    .map((p) => (
+                      <Tooltip
+                        key={p.id}
+                        title={`${p.name}${p.following ? '' : ' (browsing)'} — ${formatTime(p.position)}`}
+                      >
+                        <div
+                          className={classes.posMarker}
+                          style={{
+                            left: `${Math.min((p.position / currentTrack.duration) * 100, 100)}%`,
+                            backgroundColor: p.following ? '#1976d2' : '#6a1b9a',
+                          }}
+                        >
+                          {(p.name || '?').charAt(0).toUpperCase()}
+                        </div>
+                      </Tooltip>
+                    ))}
+                </div>
+              )}
+            </div>
+            <span className={classes.timeText}>{formatTime(currentTrack?.duration)}</span>
+          </div>
+        </div>
+
+        {/* Right: reactions + volume */}
+        <div className={classes.playerRight}>
+          <div className={classes.reactionBar}>
+            {REACTION_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                className={classes.reactionButton}
+                onClick={() => handleSendReaction(emoji)}
+                aria-label={`React ${emoji}`}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+          <div className={classes.volumeBox}>
+            <IconButton size="small" onClick={() => setVolume((v) => (v > 0 ? 0 : 1))}>
+              {volume > 0 ? (
+                <VolumeUpIcon fontSize="small" />
+              ) : (
+                <VolumeOffIcon fontSize="small" />
+              )}
+            </IconButton>
+            <Slider
+              value={volume}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(_e, value) => setVolume(value)}
+              aria-label="Volume"
+            />
+          </div>
+        </div>
+      </Paper>
     </div>
     </DndProvider>
   )
