@@ -114,7 +114,7 @@ var _ = Describe("serveIndex", func() {
 		r := httptest.NewRequest("GET", "/index.html", nil)
 		w := httptest.NewRecorder()
 
-		serveIndex(ds, fs, nil)(w, r)
+		serveIndex(ds, fs, nil, nil)(w, r)
 
 		config := extractAppConfig(w.Body.String())
 		Expect(config).To(HaveKey("welcomeMessage"))
