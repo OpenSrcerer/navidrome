@@ -53,9 +53,10 @@ type Participant struct {
 
 // StatePayload is broadcast to all participants after state changes.
 type StatePayload struct {
-	Action            string      `json:"action,omitempty"`     // What triggered this state update (e.g. "play", "seek", "queue_add")
+	Action            string      `json:"action,omitempty"` // What triggered this state update (e.g. "play", "seek", "queue_add", "tick", "auto_advance")
 	CurrentTrackIndex int         `json:"currentTrackIndex"`
-	Position          float64     `json:"position"`
+	Position          float64     `json:"position"`   // Authoritative position (seconds) at ServerTime
+	ServerTime        int64       `json:"serverTime"` // Server wall-clock (unix millis) when this state was computed
 	IsPlaying         bool        `json:"isPlaying"`
 	Queue             []TrackInfo `json:"queue"`
 }
@@ -86,13 +87,19 @@ type LiveSession struct {
 	format       string
 	maxBitRate   int
 	tracks       []TrackInfo
-	queue        []int   // Indices into tracks (playback order)
-	currentIndex int     // Current position in queue
-	position     float64 // Playback position in seconds
+	queue        []int // Indices into tracks (playback order)
+	currentIndex int   // Current position in queue
+	// Playback position is modeled as a base + a server timestamp so the
+	// server can compute the authoritative "live" position at any instant
+	// (positionBase + elapsed-since-lastUpdate while playing). This is what
+	// makes drift correction and accurate late-joiner sync possible.
+	positionBase float64   // Playback position (seconds) at lastUpdate
+	lastUpdate   time.Time // Server time when positionBase/isPlaying last changed
 	isPlaying    bool
 	remoteHolder string // Participant ID who has the remote
 	participants map[string]*Participant
 	graceTimer   *time.Timer
+	advanceTimer *time.Timer // Fires when the current track is expected to end
 	hub          *Hub
 }
 
@@ -145,7 +152,8 @@ func (h *Hub) CreateSession(session *model.ListenSession) *LiveSession {
 		tracks:       tracks,
 		queue:        queue,
 		currentIndex: 0,
-		position:     0,
+		positionBase: 0,
+		lastUpdate:   time.Now(),
 		isPlaying:    false,
 		remoteHolder: "", // Will be set when host joins
 		participants: make(map[string]*Participant),
@@ -175,8 +183,11 @@ func (h *Hub) GetDataStore() model.DataStore {
 	return h.ds
 }
 
-// Join adds a participant to the session.
-func (ls *LiveSession) Join(conn *websocket.Conn, name string, isHost bool) *Participant {
+// Join adds a participant to the session. clientID is a stable, client-provided
+// identifier (persisted in the browser) so that a reconnecting client keeps its
+// identity — and crucially its remote-holder status — across brief drops. If it
+// is empty, a random ID is assigned (legacy behavior).
+func (ls *LiveSession) Join(conn *websocket.Conn, name string, isHost bool, clientID string) *Participant {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
@@ -186,11 +197,27 @@ func (ls *LiveSession) Join(conn *websocket.Conn, name string, isHost bool) *Par
 		ls.graceTimer = nil
 	}
 
+	id := clientID
+	if id == "" {
+		id = uuid.New().String()
+	}
+
+	joinedAt := time.Now()
+	// Reconnect: a participant with this stable ID already exists. Take over its
+	// slot (preserving JoinedAt so remote-transfer ordering is stable) and tear
+	// down the stale connection. The stale ReadPump's Leave is pointer-guarded,
+	// so it will not evict this new participant.
+	if existing, ok := ls.participants[id]; ok {
+		joinedAt = existing.JoinedAt
+		close(existing.sendCh)
+		_ = existing.conn.Close()
+	}
+
 	p := &Participant{
-		ID:       uuid.New().String(),
+		ID:       id,
 		Name:     name,
 		IsHost:   isHost,
-		JoinedAt: time.Now(),
+		JoinedAt: joinedAt,
 		conn:     conn,
 		sendCh:   make(chan []byte, sendChannelSize),
 		session:  ls,
@@ -206,21 +233,23 @@ func (ls *LiveSession) Join(conn *websocket.Conn, name string, isHost bool) *Par
 	return p
 }
 
-// Leave removes a participant and handles remote transfer / grace period.
-func (ls *LiveSession) Leave(participantID string) {
+// Leave removes a participant and handles remote transfer / grace period. It is
+// pointer-guarded: if the participant currently stored under p.ID is not p (e.g.
+// because the client already reconnected and took over the slot), this is a
+// no-op, so a stale connection's teardown cannot evict the live one.
+func (ls *LiveSession) Leave(p *Participant) {
 	ls.mu.Lock()
 
-	p, ok := ls.participants[participantID]
-	if !ok {
+	if current, ok := ls.participants[p.ID]; !ok || current != p {
 		ls.mu.Unlock()
 		return
 	}
 
 	close(p.sendCh)
-	delete(ls.participants, participantID)
+	delete(ls.participants, p.ID)
 
 	// If the departing participant held the remote, transfer it
-	if ls.remoteHolder == participantID {
+	if ls.remoteHolder == p.ID {
 		ls.remoteHolder = ls.findLongestConnected()
 	}
 
@@ -265,6 +294,85 @@ func (ls *LiveSession) findLongestConnected() string {
 	return ""
 }
 
+// effectivePositionLocked returns the authoritative playback position right now,
+// advancing positionBase by the wall-clock elapsed since lastUpdate while playing.
+// Caller must hold ls.mu (read or write).
+func (ls *LiveSession) effectivePositionLocked() float64 {
+	if !ls.isPlaying {
+		return ls.positionBase
+	}
+	pos := ls.positionBase + time.Since(ls.lastUpdate).Seconds()
+	if dur := ls.currentDurationLocked(); dur > 0 && pos > dur {
+		pos = dur
+	}
+	return pos
+}
+
+// currentDurationLocked returns the duration (seconds) of the current track, or 0
+// if unknown. Caller must hold ls.mu.
+func (ls *LiveSession) currentDurationLocked() float64 {
+	if ls.currentIndex >= 0 && ls.currentIndex < len(ls.queue) {
+		idx := ls.queue[ls.currentIndex]
+		if idx >= 0 && idx < len(ls.tracks) {
+			return float64(ls.tracks[idx].Duration)
+		}
+	}
+	return 0
+}
+
+// cancelAdvanceLocked stops any pending auto-advance timer. Caller must hold ls.mu.
+func (ls *LiveSession) cancelAdvanceLocked() {
+	if ls.advanceTimer != nil {
+		ls.advanceTimer.Stop()
+		ls.advanceTimer = nil
+	}
+}
+
+// scheduleAdvanceLocked (re)arms the auto-advance timer to fire when the current
+// track is expected to end. This is what makes the queue play through like a
+// playlist without depending on any client. Caller must hold ls.mu.
+func (ls *LiveSession) scheduleAdvanceLocked() {
+	ls.cancelAdvanceLocked()
+	if !ls.isPlaying {
+		return
+	}
+	dur := ls.currentDurationLocked()
+	if dur <= 0 {
+		return // Unknown duration; rely on the holder's track_ended fallback
+	}
+	remaining := dur - ls.effectivePositionLocked()
+	if remaining < 0 {
+		remaining = 0
+	}
+	ls.advanceTimer = time.AfterFunc(time.Duration(remaining*float64(time.Second)), ls.onAdvanceTimer)
+}
+
+// onAdvanceTimer is invoked when a track is expected to have finished.
+func (ls *LiveSession) onAdvanceTimer() {
+	ls.mu.Lock()
+	ls.advanceToNextLocked()
+	ls.mu.Unlock()
+	ls.broadcastState("auto_advance")
+}
+
+// advanceToNextLocked moves to the next queued track (or stops at the end of the
+// queue) and re-arms the advance timer. Caller must hold ls.mu.
+func (ls *LiveSession) advanceToNextLocked() {
+	if ls.currentIndex < len(ls.queue)-1 {
+		ls.currentIndex++
+		ls.positionBase = 0
+		ls.lastUpdate = time.Now()
+		ls.isPlaying = true
+		ls.scheduleAdvanceLocked()
+		return
+	}
+	// End of queue: stop at the end of the last track.
+	ls.isPlaying = false
+	ls.positionBase = ls.currentDurationLocked()
+	ls.lastUpdate = time.Now()
+	ls.cancelAdvanceLocked()
+}
+
 // HandleMessage processes an incoming WebSocket message from a participant.
 func (ls *LiveSession) HandleMessage(sender *Participant, msg WSMessage) {
 	switch msg.Action {
@@ -278,6 +386,8 @@ func (ls *LiveSession) HandleMessage(sender *Participant, msg WSMessage) {
 		ls.handleSkipNext(sender)
 	case "skip_prev":
 		ls.handleSkipPrev(sender)
+	case "track_ended":
+		ls.handleTrackEnded(sender)
 	case "sync":
 		ls.handleSync(sender, msg.Payload)
 	case "pass_remote":
@@ -311,7 +421,10 @@ func (ls *LiveSession) handlePlay(sender *Participant) {
 		return
 	}
 	ls.mu.Lock()
+	ls.positionBase = ls.effectivePositionLocked()
 	ls.isPlaying = true
+	ls.lastUpdate = time.Now()
+	ls.scheduleAdvanceLocked()
 	ls.mu.Unlock()
 	ls.broadcastState("play")
 }
@@ -322,7 +435,10 @@ func (ls *LiveSession) handlePause(sender *Participant) {
 		return
 	}
 	ls.mu.Lock()
+	ls.positionBase = ls.effectivePositionLocked()
 	ls.isPlaying = false
+	ls.lastUpdate = time.Now()
+	ls.cancelAdvanceLocked()
 	ls.mu.Unlock()
 	ls.broadcastState("pause")
 }
@@ -340,7 +456,9 @@ func (ls *LiveSession) handleSeek(sender *Participant, payload json.RawMessage) 
 		return
 	}
 	ls.mu.Lock()
-	ls.position = data.Position
+	ls.positionBase = data.Position
+	ls.lastUpdate = time.Now()
+	ls.scheduleAdvanceLocked()
 	ls.mu.Unlock()
 	ls.broadcastState("seek")
 }
@@ -353,7 +471,9 @@ func (ls *LiveSession) handleSkipNext(sender *Participant) {
 	ls.mu.Lock()
 	if ls.currentIndex < len(ls.queue)-1 {
 		ls.currentIndex++
-		ls.position = 0
+		ls.positionBase = 0
+		ls.lastUpdate = time.Now()
+		ls.scheduleAdvanceLocked()
 	}
 	ls.mu.Unlock()
 	ls.broadcastState("skip_next")
@@ -367,10 +487,34 @@ func (ls *LiveSession) handleSkipPrev(sender *Participant) {
 	ls.mu.Lock()
 	if ls.currentIndex > 0 {
 		ls.currentIndex--
-		ls.position = 0
+		ls.positionBase = 0
+		ls.lastUpdate = time.Now()
+		ls.scheduleAdvanceLocked()
 	}
 	ls.mu.Unlock()
 	ls.broadcastState("skip_prev")
+}
+
+// handleTrackEnded is a fallback for auto-advance when the server's timer can't
+// fire (e.g. missing/incorrect duration metadata). The remote holder reports
+// that its audio element reached the end. We only advance if we genuinely appear
+// to be at the end of the current track, which makes this idempotent with the
+// server-side advance timer (after a timer-driven advance, position is reset to
+// 0 and this becomes a no-op).
+func (ls *LiveSession) handleTrackEnded(sender *Participant) {
+	if !ls.isRemoteHolder(sender) {
+		return
+	}
+	ls.mu.Lock()
+	dur := ls.currentDurationLocked()
+	atEnd := dur <= 0 || ls.effectivePositionLocked() >= dur-1.0
+	if !atEnd {
+		ls.mu.Unlock()
+		return
+	}
+	ls.advanceToNextLocked()
+	ls.mu.Unlock()
+	ls.broadcastState("auto_advance")
 }
 
 func (ls *LiveSession) handleSync(sender *Participant, payload json.RawMessage) {
@@ -384,17 +528,21 @@ func (ls *LiveSession) handleSync(sender *Participant, payload json.RawMessage) 
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return
 	}
-	// Only update internal state for new joiners — do NOT broadcast.
-	// Broadcasting sync would cause periodic position jumps on all clients,
-	// ruining smooth playback. Clients track their own position locally and
-	// only seek when the remote holder performs an explicit action
-	// (play, pause, seek, skip).
+	// The remote holder is the source of truth for the live position. Its
+	// periodic sync refreshes the server's authoritative clock (positionBase +
+	// lastUpdate) to track the holder's *actual* audio position, accounting for
+	// the holder's own buffering. We then re-broadcast this as a "tick" to the
+	// other participants so they can softly correct drift (small playbackRate
+	// nudges) against the shared clock — without disturbing the holder.
 	ls.mu.Lock()
-	ls.position = data.Position
+	ls.positionBase = data.Position
+	ls.lastUpdate = time.Now()
 	if data.TrackIndex >= 0 && data.TrackIndex < len(ls.queue) {
 		ls.currentIndex = data.TrackIndex
 	}
+	ls.scheduleAdvanceLocked()
 	ls.mu.Unlock()
+	ls.broadcastStateExcept("tick", sender.ID)
 }
 
 func (ls *LiveSession) handlePassRemote(sender *Participant, payload json.RawMessage) {
@@ -599,12 +747,13 @@ func (ls *LiveSession) handleEndSession(sender *Participant) {
 		return
 	}
 
-	ls.mu.RLock()
+	ls.mu.Lock()
+	ls.cancelAdvanceLocked()
 	participants := make([]*Participant, 0, len(ls.participants))
 	for _, p := range ls.participants {
 		participants = append(participants, p)
 	}
-	ls.mu.RUnlock()
+	ls.mu.Unlock()
 
 	// Notify all participants
 	endMsg, _ := json.Marshal(WSMessage{
@@ -626,6 +775,13 @@ func (ls *LiveSession) handleEndSession(sender *Participant) {
 // The action parameter indicates what triggered the broadcast (e.g. "play", "seek", "queue_add"),
 // allowing clients to decide whether to apply the position or ignore it.
 func (ls *LiveSession) broadcastState(action string) {
+	ls.broadcastStateExcept(action, "")
+}
+
+// broadcastStateExcept sends the current state to all participants except the one
+// with exceptID (pass "" to send to everyone). Used for "tick" updates that should
+// not disturb the remote holder, which is the source of the position.
+func (ls *LiveSession) broadcastStateExcept(action string, exceptID string) {
 	ls.mu.RLock()
 	queueTracks := make([]TrackInfo, len(ls.queue))
 	for i, idx := range ls.queue {
@@ -636,12 +792,16 @@ func (ls *LiveSession) broadcastState(action string) {
 	state := StatePayload{
 		Action:            action,
 		CurrentTrackIndex: ls.currentIndex,
-		Position:          ls.position,
+		Position:          ls.effectivePositionLocked(),
+		ServerTime:        time.Now().UnixMilli(),
 		IsPlaying:         ls.isPlaying,
 		Queue:             queueTracks,
 	}
 	participants := make([]*Participant, 0, len(ls.participants))
 	for _, p := range ls.participants {
+		if exceptID != "" && p.ID == exceptID {
+			continue
+		}
 		participants = append(participants, p)
 	}
 	ls.mu.RUnlock()
@@ -749,7 +909,8 @@ func (ls *LiveSession) SendWelcome(p *Participant) {
 	state := StatePayload{
 		Action:            "welcome",
 		CurrentTrackIndex: ls.currentIndex,
-		Position:          ls.position,
+		Position:          ls.effectivePositionLocked(),
+		ServerTime:        time.Now().UnixMilli(),
 		IsPlaying:         ls.isPlaying,
 		Queue:             queueTracks,
 	}
@@ -823,7 +984,7 @@ func (ls *LiveSession) SendWelcome(p *Participant) {
 // ReadPump reads messages from the WebSocket and dispatches them.
 func (p *Participant) ReadPump() {
 	defer func() {
-		p.session.Leave(p.ID)
+		p.session.Leave(p)
 		p.conn.Close()
 	}()
 

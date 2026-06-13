@@ -246,6 +246,7 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		name = "Guest"
 	}
 	isHost := r.URL.Query().Get("host") == "true"
+	clientID := r.URL.Query().Get("clientId")
 
 	ls := rt.hub.GetSession(id)
 	if ls == nil {
@@ -264,7 +265,7 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	participant := ls.Join(conn, name, isHost)
+	participant := ls.Join(conn, name, isHost, clientID)
 
 	// Send welcome + initial state
 	ls.SendWelcome(participant)
